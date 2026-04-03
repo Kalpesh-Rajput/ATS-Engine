@@ -1,4 +1,4 @@
-# ⚡ ATS — AI-Powered Applicant Tracking System (Local Setup — No Docker)
+# ⚡ ATS — AI-Powered Applicant Tracking System
 
 This guide walks you through running the entire project on your local machine **without Docker**.
 
