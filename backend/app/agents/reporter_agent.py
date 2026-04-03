@@ -16,6 +16,11 @@ def reporter_agent(state: ATSState) -> ATSState:
         linkedin_flag=state.get("linkedin_flag"),
     )
 
+    output_blocked = bool(state.get("output_blocked"))
+    if output_blocked:
+        logger.warning("reporter_agent_output_blocked", candidate_id=state["candidate_id"])
+        return state
+
     # Store embedding in Faiss for future semantic search
     resume_embedding = state.get("resume_embedding")
     if resume_embedding:

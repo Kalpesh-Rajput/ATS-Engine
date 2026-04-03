@@ -17,6 +17,7 @@ from app.agents.state import ATSState
 from app.agents.parser_agent import parser_agent
 from app.agents.scorer_agent import scorer_agent
 from app.agents.linkedin_agent import linkedin_agent
+from app.agents.evaluator_agent import evaluator_agent
 from app.agents.reporter_agent import reporter_agent
 
 
@@ -27,6 +28,7 @@ def build_pipeline() -> StateGraph:
     workflow.add_node("parser", parser_agent)
     workflow.add_node("scorer", scorer_agent)
     workflow.add_node("linkedin", linkedin_agent)
+    workflow.add_node("evaluator", evaluator_agent)
     workflow.add_node("reporter", reporter_agent)
 
     # Entry point
@@ -40,8 +42,9 @@ def build_pipeline() -> StateGraph:
     # work internally when input text is missing.
     workflow.add_edge("parser", "scorer")
     workflow.add_edge("parser", "linkedin")
-    workflow.add_edge("scorer", "reporter")
-    workflow.add_edge("linkedin", "reporter")
+    workflow.add_edge("scorer", "evaluator")
+    workflow.add_edge("linkedin", "evaluator")
+    workflow.add_edge("evaluator", "reporter")
     workflow.add_edge("reporter", END)
 
     return workflow.compile()
@@ -102,6 +105,7 @@ def run_pipeline_sync(
         "resume_embedding": None,
         "linkedin_embedding": None,
         "errors": [],
+        "output_blocked": False,
         "extracted_data": {},
     }
 

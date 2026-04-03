@@ -9,6 +9,7 @@ from app.agents.prompts.templates import (
     PARSER_SYSTEM,
 )
 from app.agents.tools.llm_client import llm_call_json
+from app.agents.guardrails import validate_process_guardrails, validate_input_guardrails
 from app.core.logging import logger
 from app.services.pdf_parser import extract_text_from_pdf
 from app.services.embedding_service import embed_document
@@ -93,6 +94,14 @@ def parser_agent(state: ATSState) -> ATSState:
         errors.append("Failed to extract text from JD PDF")
     if not resume_text:
         errors.append("Failed to extract text from resume PDF")
+    errors.extend(
+        validate_input_guardrails(
+            jd_text=jd_text,
+            resume_text=resume_text,
+            job_title=state.get("job_title"),
+            filename_hints=[state.get("jd_path", ""), state.get("resume_path", "")],
+        )
+    )
 
     # ─── Pre-compute resume embedding once ───────────────────────
     # Parser runs before the fan-out to scorer + linkedin, so both can
@@ -130,7 +139,7 @@ def parser_agent(state: ATSState) -> ATSState:
         except Exception as e:
             errors.append(f"JD parse error: {e}")
 
-    return {
+    new_state = {
         **state,
         "jd_text": jd_text,
         "resume_text": resume_text,
@@ -148,3 +157,5 @@ def parser_agent(state: ATSState) -> ATSState:
         "extracted_data": {**resume_data, "jd": jd_data},
         "errors": errors,
     }
+    new_state["errors"] = [*new_state["errors"], *validate_process_guardrails(new_state)]
+    return new_state

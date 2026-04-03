@@ -191,6 +191,20 @@ def run_scoring_pipeline(
                         candidate = futures[fut]
                         try:
                             state = fut.result()
+                            guardrails = (state.get("extracted_data") or {}).get("guardrails") or {}
+                            output_blocked = bool(
+                                state.get("output_blocked")
+                                or guardrails.get("output_blocked")
+                            )
+
+                            if output_blocked:
+                                candidate.extracted_data = state.get("extracted_data", {})
+                                candidate.status = "failed"
+                                failed += 1
+                                job.processed_candidates = processed
+                                job.failed_candidates = failed
+                                db.commit()
+                                continue
 
                             # Persist agent output to candidate record (UI reads these fields)
                             candidate.name = state.get("name")

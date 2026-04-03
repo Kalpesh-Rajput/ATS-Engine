@@ -173,3 +173,31 @@ Return JSON:
 
 linkedin_flag must be "green" if score >= 70, otherwise "red".
 """
+
+# ─── Evaluator Agent (LLM-as-Judge) ──────────────────────────────
+
+EVALUATOR_SYSTEM = """You are a light ATS output reviewer.
+Give brief, optional observations only. Do not reject candidates.
+Return ONLY valid JSON."""
+
+EVALUATOR_PROMPT = """Review this ATS bundle for logging only (not for blocking).
+
+Check lightly:
+- ats_score looks like a number 0–100
+- main_summary is non-empty text
+
+Do NOT return FAIL. Always use verdict PASS for the pipeline.
+You may add short optional notes if something looks odd.
+
+CANDIDATE EVALUATION PAYLOAD:
+{evaluation_payload}
+
+Return JSON:
+{{
+  "verdict": "PASS",
+  "confidence": 0.9,
+  "reasons": ["optional observation 1"],
+  "notes": ["optional note"],
+  "required_fixes": []
+}}
+"""

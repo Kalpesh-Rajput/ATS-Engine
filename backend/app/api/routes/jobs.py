@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_recruiter
 from app.db.session import get_db
 from app.core.config import settings
+from app.agents.guardrails import has_prompt_injection
 from app.models.candidate import Candidate
 from app.models.recruiter import Recruiter
 from app.models.scoring_job import ScoringJob
@@ -174,6 +175,16 @@ async def add_candidates_to_job(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail=f"{f.filename} is not a PDF",
             )
+        if not (f.filename or "").lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=f"{f.filename} must have .pdf extension",
+            )
+        if has_prompt_injection(f.filename or ""):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{f.filename} has suspicious input pattern",
+            )
         if f.size and f.size > settings.max_file_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -191,6 +202,16 @@ async def add_candidates_to_job(
         cand_id = uuid.uuid4()
         res_bytes = await resume.read()
         li_bytes = await linkedin.read()
+        if not res_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{resume.filename} is empty",
+            )
+        if not li_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{linkedin.filename} is empty",
+            )
 
         res_path = _save_file(res_bytes, base_resumes_dir / f"{cand_id}_{resume.filename}")
         li_path = _save_file(li_bytes, base_linkedin_dir / f"{cand_id}_{linkedin.filename}")

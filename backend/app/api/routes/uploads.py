@@ -14,6 +14,7 @@ from app.models.candidate import Candidate
 from app.models.recruiter import Recruiter
 from app.models.scoring_job import ScoringJob
 from app.schemas.job import ScoringJobResponse
+from app.agents.guardrails import has_prompt_injection
 from app.services.tasks import run_scoring_pipeline
 
 router = APIRouter()
@@ -36,6 +37,12 @@ async def upload_and_trigger(
     db: AsyncSession = Depends(get_db),
     current: Recruiter = Depends(get_current_recruiter),
 ):
+    # Input guardrail: basic text validation + injection checks
+    if not (job_title or "").strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Job title is required")
+    if has_prompt_injection(job_title):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Potential malicious input in job title")
+
     # Validate counts
     if len(resumes) != len(linkedin_profiles):
         raise HTTPException(
@@ -53,6 +60,16 @@ async def upload_and_trigger(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail=f"{f.filename} is not a PDF",
             )
+        if not (f.filename or "").lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=f"{f.filename} must have .pdf extension",
+            )
+        if has_prompt_injection(f.filename or ""):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{f.filename} has suspicious input pattern",
+            )
         if f.size and f.size > settings.max_file_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -65,6 +82,8 @@ async def upload_and_trigger(
 
     # Save JD
     jd_bytes = await job_description.read()
+    if not jd_bytes:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="JD PDF is empty")
     jd_path = _save_file(jd_bytes, job_dir / "jd" / job_description.filename)
 
     # Create scoring job record
@@ -85,6 +104,16 @@ async def upload_and_trigger(
         cand_id = uuid.uuid4()
         res_bytes = await resume.read()
         li_bytes = await linkedin.read()
+        if not res_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{resume.filename} is empty",
+            )
+        if not li_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{linkedin.filename} is empty",
+            )
 
         res_path = _save_file(res_bytes, job_dir / "resumes" / f"{cand_id}_{resume.filename}")
         li_path = _save_file(li_bytes, job_dir / "linkedin" / f"{cand_id}_{linkedin.filename}")

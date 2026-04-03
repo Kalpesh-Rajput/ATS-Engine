@@ -3,6 +3,7 @@ import re
 
 from app.agents.state import ATSState
 from app.agents.prompts.templates import SCORER_PROMPT, SCORER_SYSTEM
+from app.agents.guardrails import validate_output_guardrails
 from app.agents.tools.llm_client import llm_call_json
 from app.core.logging import logger
 from app.services.embedding_service import cosine_similarity, embed_document
@@ -12,13 +13,26 @@ def _norm_skill(s: str) -> str:
     return (s or "").strip().lower()
 
 
-def _skill_matches(jd_skill: str, candidate_skills: list[str]) -> bool:
+def _normalize_for_match(s: str) -> str:
+    s = _norm_skill(s)
+    # Normalize punctuation variants: "AI-powered" ~= "AI power".
+    s = re.sub(r"[-_/]", " ", s)
+    s = re.sub(r"[^a-z0-9+#.\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _tokenize(s: str) -> list[str]:
+    return [t for t in _normalize_for_match(s).split() if t]
+
+
+def _skill_matches(jd_skill: str, candidate_skills: list[str], resume_text: str) -> bool:
     """
     Simple substring matcher to avoid LLM hallucinating skill matches.
     - "python" matches "python 3.11"
     - "fastapi" matches "FastAPI"
     """
-    jd_raw = _norm_skill(jd_skill)
+    jd_raw = _normalize_for_match(jd_skill)
     if not jd_raw:
         return False
 
@@ -33,13 +47,37 @@ def _skill_matches(jd_skill: str, candidate_skills: list[str]) -> bool:
     if jd not in alternatives:
         alternatives.append(jd)
 
-    for cand in candidate_skills:
-        c = _norm_skill(cand)
+    resume_norm = f" {_normalize_for_match(resume_text)} "
+    candidate_norm = [_normalize_for_match(c) for c in candidate_skills if _normalize_for_match(c)]
+
+    for cand in candidate_norm:
+        c = cand
         if not c:
             continue
         for alt in alternatives:
+            alt_norm = _normalize_for_match(alt)
+            if not alt_norm:
+                continue
             if alt in c or c in alt:
                 return True
+            # Token overlap fallback for phrase-level variants.
+            alt_tokens = set(_tokenize(alt_norm))
+            c_tokens = set(_tokenize(c))
+            if alt_tokens and c_tokens:
+                overlap = len(alt_tokens & c_tokens)
+                if overlap >= max(1, min(len(alt_tokens), len(c_tokens)) - 1):
+                    return True
+
+    # Final fallback: direct scan in full resume text to protect against parser misses.
+    for alt in alternatives:
+        alt_norm = _normalize_for_match(alt)
+        if not alt_norm:
+            continue
+        if f" {alt_norm} " in resume_norm:
+            return True
+        # For short single-token skills (html/css/ui/ux), token-boundary contains check.
+        if len(alt_norm.split()) == 1 and re.search(rf"\b{re.escape(alt_norm)}\b", resume_norm):
+            return True
     return False
 
 
@@ -97,7 +135,7 @@ def scorer_agent(state: ATSState) -> ATSState:
     skills_matched: list[str] = []
     skills_not_matched: list[str] = []
     for jd_skill in jd_all:
-        if _skill_matches(jd_skill, candidate_skills):
+        if _skill_matches(jd_skill, candidate_skills, resume_text):
             skills_matched.append(jd_skill)
         else:
             skills_not_matched.append(jd_skill)
@@ -211,7 +249,7 @@ def scorer_agent(state: ATSState) -> ATSState:
         # Never break scoring due to validation; just record the issue.
         errors.append(f"scorer_validation_failed: {e}")
 
-    return {
+    out = {
         "ats_score": final_score,
         "skills_matched": result.get("skills_matched", []),
         "skills_not_matched": result.get("skills_not_matched", []),
@@ -230,3 +268,5 @@ def scorer_agent(state: ATSState) -> ATSState:
             },
         },
     }
+    out["errors"] = [*(out.get("errors", []) or []), *validate_output_guardrails(out)]
+    return out

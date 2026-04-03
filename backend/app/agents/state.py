@@ -51,6 +51,7 @@ class ATSState(TypedDict):
 
     # ─── Errors ──────────────────────────────────────────────────
     errors: List[str]
+    output_blocked: Optional[bool]
 
     # ─── Raw extracted data ──────────────────────────────────────
     extracted_data: Dict[str, Any]
