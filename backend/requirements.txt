@@ -1,0 +1,47 @@
+# ─── Web framework ───────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# ─── Auth ────────────────────────────────────────────────────────
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+
+# ─── Database ────────────────────────────────────────────────────
+sqlalchemy>=2.0.30
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+alembic>=1.14.0
+
+# ─── Validation ──────────────────────────────────────────────────
+pydantic>=2.7.1
+pydantic-settings>=2.3.0
+email-validator>=2.1.1
+
+# ─── Task queue ──────────────────────────────────────────────────
+celery>=5.4.0
+redis>=5.0.4
+flower>=2.0.1
+
+# ─── Agent / LLM ─────────────────────────────────────────────────
+langchain>=0.3.0
+langchain-groq>=0.1.4
+langchain-openai
+langchain-community>=0.3.0
+langgraph>=0.1.1
+groq>=0.9.0
+openai
+
+# ─── Embeddings + Vector DB ──────────────────────────────────────
+sentence-transformers>=2.7.0
+faiss-cpu>=1.13.2
+einops
+
+# ─── PDF parsing ─────────────────────────────────────────────────
+pdfplumber>=0.11.1
+
+# ─── Utilities ───────────────────────────────────────────────────
+python-dotenv>=1.0.1
+httpx>=0.27.0
+tenacity>=8.3.0
+structlog>=24.1.0
