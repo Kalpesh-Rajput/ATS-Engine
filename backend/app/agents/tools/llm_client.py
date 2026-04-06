@@ -8,7 +8,7 @@ Chat client pointed at `https://openrouter.ai/api/v1`.
 import json
 import re
 import threading
-from functools import lru_cache
+import time
 
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -58,12 +58,22 @@ def get_llm() -> BaseChatModel:
 def llm_call(system_prompt: str, user_prompt: str) -> str:
     """Make a chat completion call and return the raw string response."""
     llm = get_llm()
+    started = time.perf_counter()
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt),
     ]
     response = llm.invoke(messages)
-    return response.content
+    content = response.content
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "llm_call_complete",
+        elapsed_ms=elapsed_ms,
+        model=getattr(llm, "model_name", None) or getattr(llm, "model", "unknown"),
+        input_chars=len(system_prompt or "") + len(user_prompt or ""),
+        output_chars=len(content or ""),
+    )
+    return content
 
 
 def llm_call_json(system_prompt: str, user_prompt: str) -> dict:

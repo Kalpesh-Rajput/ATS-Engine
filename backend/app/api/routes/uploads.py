@@ -3,6 +3,7 @@ import uuid
 from pathlib import Path
 from typing import List
 
+from celery import chain
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +16,7 @@ from app.models.recruiter import Recruiter
 from app.models.scoring_job import ScoringJob
 from app.schemas.job import ScoringJobResponse
 from app.agents.guardrails import has_prompt_injection
-from app.services.tasks import run_scoring_pipeline
+from app.services.tasks import preprocess_jd, run_scoring_pipeline
 
 router = APIRouter()
 
@@ -144,14 +145,18 @@ async def upload_and_trigger(
     # would cause the worker to not find the job/candidates and leave them stuck in `pending`.
     await db.commit()
 
-    # Dispatch Celery task
-    task = run_scoring_pipeline.delay(
-        job_id=str(job_id),
-        recruiter_id=str(current.id),
-        jd_path=jd_path,
-        job_title=job_title,
-        candidates=candidate_payloads,
-    )
+    # Dispatch chained Celery tasks:
+    # 1) preprocess JD once, 2) score candidate batch
+    task = chain(
+        preprocess_jd.si(job_id=str(job_id), jd_path=jd_path),
+        run_scoring_pipeline.si(
+            job_id=str(job_id),
+            recruiter_id=str(current.id),
+            jd_path=jd_path,
+            job_title=job_title,
+            candidates=candidate_payloads,
+        ),
+    ).apply_async()
     scoring_job.celery_task_id = task.id
     await db.flush()
 

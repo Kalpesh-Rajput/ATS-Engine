@@ -269,9 +269,17 @@ export default function JobResultsPage() {
               </div>
 
               {/* LinkedIn flag */}
-              <span className={c.linkedin_flag === 'green' ? 'badge-green' : 'badge-red'}>
+              <span
+                className={
+                  c.linkedin_flag === 'green'
+                    ? 'badge-green'
+                    : c.linkedin_flag === 'orange'
+                      ? 'badge-orange'
+                      : 'badge-red'
+                }
+              >
                 <Flag className="w-3 h-3" />
-                {c.linkedin_flag === 'green' ? 'Green' : 'Red'}
+                {c.linkedin_flag === 'green' ? 'Green' : c.linkedin_flag === 'orange' ? 'Orange' : 'Red'}
               </span>
 
               <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />

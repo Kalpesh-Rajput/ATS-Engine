@@ -21,6 +21,86 @@ def _get_sync_session() -> Session:
     return Session(bind=_sync_engine)
 
 
+def _preprocess_jd_for_job(db: Session, job_id: str, jd_path: str) -> dict:
+    """
+    Parse+embed JD once and persist cache in scoring_jobs.
+    Returns cached fields used by candidate pipeline.
+    """
+    from app.models.scoring_job import ScoringJob
+    from app.agents.parser_agent import normalize_skills
+    from app.agents.prompts.templates import JD_PARSER_PROMPT, JD_PARSER_SYSTEM
+    from app.agents.tools.llm_client import llm_call_json
+    from app.services.embedding_service import embed_document
+    from app.services.pdf_parser import extract_text_from_pdf
+
+    job = db.get(ScoringJob, job_id)
+    if not job:
+        raise ValueError(f"ScoringJob not found: {job_id}")
+
+    meta = job.meta or {}
+    if job.jd_parsed_at and job.jd_text and meta.get("jd_required_skills") is not None:
+        return {
+            "jd_text": job.jd_text or "",
+            "jd_required_skills": meta.get("jd_required_skills") or [],
+            "jd_preferred_skills": meta.get("jd_preferred_skills") or [],
+            "jd_embedding": meta.get("jd_embedding"),
+        }
+
+    jd_text = (job.jd_text or meta.get("jd_text") or "").strip()
+    if not jd_text:
+        jd_text = extract_text_from_pdf(jd_path) or ""
+
+    jd_required_skills = meta.get("jd_required_skills") or []
+    jd_preferred_skills = meta.get("jd_preferred_skills") or []
+    if (not jd_required_skills and not jd_preferred_skills) and jd_text:
+        jd_data = llm_call_json(
+            JD_PARSER_SYSTEM,
+            JD_PARSER_PROMPT.format(jd_text=jd_text[:3000]),
+        )
+        jd_required_skills = normalize_skills(jd_data.get("required_skills", []))
+        jd_preferred_skills = normalize_skills(jd_data.get("preferred_skills", []))
+
+    jd_embedding = meta.get("jd_embedding")
+    if jd_embedding is None and jd_text:
+        jd_embedding = embed_document(jd_text)
+
+    job.jd_text = jd_text
+    meta["jd_text"] = jd_text
+    meta["jd_required_skills"] = jd_required_skills
+    meta["jd_preferred_skills"] = jd_preferred_skills
+    meta["jd_embedding"] = jd_embedding
+    job.meta = meta
+    job.jd_parsed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    logger.info("jd_preprocessed", job_id=job_id, jd_parsed_at=str(job.jd_parsed_at))
+    return {
+        "jd_text": jd_text,
+        "jd_required_skills": jd_required_skills,
+        "jd_preferred_skills": jd_preferred_skills,
+        "jd_embedding": jd_embedding,
+    }
+
+
+@celery_app.task(name="app.services.tasks.preprocess_jd")
+def preprocess_jd(job_id: str, jd_path: str) -> dict:
+    """Preprocess a JD once for a scoring job and persist cache."""
+    with _get_sync_session() as db:
+        try:
+            return _preprocess_jd_for_job(db, job_id=job_id, jd_path=jd_path)
+        except Exception as exc:
+            from app.models.scoring_job import ScoringJob
+
+            job = db.get(ScoringJob, job_id)
+            if job:
+                job.status = "failed"
+                job.error_message = f"JD preprocess failed: {exc}"
+                job.completed_at = datetime.now(timezone.utc)
+                db.commit()
+            logger.error("jd_preprocess_failed", job_id=job_id, error=str(exc))
+            raise
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
 def run_scoring_pipeline(
     self,
@@ -66,11 +146,6 @@ def run_scoring_pipeline(
 
         # Import inside the worker (after model import/registry is ready).
         from app.agents.pipeline import run_pipeline_sync
-        from app.agents.parser_agent import normalize_skills
-        from app.agents.prompts.templates import JD_PARSER_PROMPT, JD_PARSER_SYSTEM
-        from app.agents.tools.llm_client import llm_call_json
-        from app.services.embedding_service import embed_document
-        from app.services.pdf_parser import extract_text_from_pdf
         from app.services.vector_store import begin_batch_upserts, flush_batch_upserts
 
         job.status = "processing"
@@ -105,47 +180,13 @@ def run_scoring_pipeline(
         job.failed_candidates = failed
 
         try:
-            # Reuse parsed/embedded JD cached in `scoring_jobs.meta`
-            # so multiple candidate batches in the same session don't re-run JD work.
-            meta = job.meta or {}
-            jd_text = job.jd_text or meta.get("jd_text") or ""
-            jd_required_skills: list[str] = meta.get("jd_required_skills") or []
-            jd_preferred_skills: list[str] = meta.get("jd_preferred_skills") or []
-            jd_embedding = meta.get("jd_embedding") or None
-            changed_meta = False
-
-            if not jd_text.strip():
-                jd_text = extract_text_from_pdf(jd_path) or ""
-                job.jd_text = jd_text
-                changed_meta = True
-
-            # Parse JD required/preferred skills once per session/job.
-            if (not jd_required_skills and not jd_preferred_skills) and jd_text.strip():
-                try:
-                    jd_data = llm_call_json(
-                        JD_PARSER_SYSTEM,
-                        JD_PARSER_PROMPT.format(jd_text=jd_text[:3000]),
-                    )
-                    jd_required_skills = normalize_skills(jd_data.get("required_skills", []))
-                    jd_preferred_skills = normalize_skills(jd_data.get("preferred_skills", []))
-                    meta["jd_required_skills"] = jd_required_skills
-                    meta["jd_preferred_skills"] = jd_preferred_skills
-                    changed_meta = True
-                except Exception as exc:
-                    logger.warning("jd_parse_failed_once", job_id=job_id, error=str(exc))
-
-            # Embed JD once per session/job.
-            if jd_embedding is None and jd_text.strip():
-                try:
-                    jd_embedding = embed_document(jd_text)
-                    meta["jd_embedding"] = jd_embedding
-                    changed_meta = True
-                except Exception as exc:
-                    logger.warning("jd_embedding_failed_once", job_id=job_id, error=str(exc))
-
-            if changed_meta:
-                job.meta = meta
-                db.commit()
+            if not job.jd_parsed_at:
+                logger.info("jd_preprocess_missing_cache", job_id=job_id)
+            jd_cache = _preprocess_jd_for_job(db, job_id=job_id, jd_path=jd_path)
+            jd_text = jd_cache["jd_text"]
+            jd_required_skills = jd_cache["jd_required_skills"]
+            jd_preferred_skills = jd_cache["jd_preferred_skills"]
+            jd_embedding = jd_cache["jd_embedding"]
 
             # Mark candidates as processing up-front.
             candidate_rows = []
@@ -297,3 +338,28 @@ def run_scoring_pipeline(
             db.commit()
             logger.error("scoring_job_failed_unexpected", job_id=job_id, error=str(exc))
             return
+
+
+@celery_app.task(name="app.services.tasks.reset_stuck_scoring_jobs")
+def reset_stuck_scoring_jobs() -> int:
+    """
+    Recover jobs that remain in `processing` too long (e.g. worker crash/restart).
+    Marks them back to `pending` for safe retriggering.
+    """
+    with _get_sync_session() as db:
+        updated = db.execute(
+            text(
+                """
+                UPDATE scoring_jobs
+                SET status = 'pending',
+                    error_message = COALESCE(error_message, 'Recovered by watchdog: stale processing state'),
+                    completed_at = NULL
+                WHERE status = 'processing'
+                  AND updated_at < NOW() - INTERVAL '30 minutes'
+                """
+            )
+        ).rowcount or 0
+        db.commit()
+    if updated:
+        logger.warning("stuck_scoring_jobs_reset", reset_count=updated)
+    return int(updated)

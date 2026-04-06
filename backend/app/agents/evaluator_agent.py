@@ -1,4 +1,4 @@
-"""Evaluator agent: final quality gate (LLM judge + deterministic guardrails)."""
+"""Evaluator agent: final quality gate (deterministic guardrails)."""
 import json
 
 from app.agents.state import ATSState
@@ -8,8 +8,6 @@ from app.agents.guardrails import (
     validate_process_guardrails,
     validate_safety_guardrails,
 )
-from app.agents.prompts.templates import EVALUATOR_PROMPT, EVALUATOR_SYSTEM
-from app.agents.tools.llm_client import llm_call_json
 from app.core.logging import logger
 
 
@@ -50,38 +48,16 @@ def evaluator_agent(state: ATSState) -> ATSState:
         "guardrail_issues": deterministic_issues,
     }
 
-    try:
-        judge = llm_call_json(
-            EVALUATOR_SYSTEM,
-            EVALUATOR_PROMPT.format(evaluation_payload=json.dumps(payload, ensure_ascii=True)[:6000]),
-        )
-        # Advisory only: pipeline always sees PASS; optional LLM hints for audit.
-        raw_verdict = str(judge.get("verdict", "PASS")).strip().upper()
-        if raw_verdict not in {"PASS", "FAIL"}:
-            raw_verdict = "PASS"
-        _raw_notes = judge.get("notes") or judge.get("reasons") or []
-        evaluator = {
-            "verdict": "PASS",
-            "confidence": float(judge.get("confidence", 0.7) or 0.7),
-            "reasons": judge.get("reasons", []) if isinstance(judge.get("reasons", []), list) else [],
-            "required_fixes": (
-                judge.get("required_fixes", [])
-                if isinstance(judge.get("required_fixes", []), list)
-                else []
-            ),
-            "source": "llm_judge",
-            "advisory_verdict": raw_verdict,
-            "advisory_notes": _raw_notes if isinstance(_raw_notes, list) else [],
-        }
-    except Exception as exc:
-        errors.append(f"evaluator_llm_error: {exc}")
+    # Low-latency path: keep evaluator deterministic only.
+    # We still preserve a compact payload snapshot for audit/debug.
+    evaluator["payload"] = json.loads(json.dumps(payload, ensure_ascii=True))
 
-    # Never block pipeline from evaluator/guardrails: record issues for audit only.
-    blocking_issues = [i for i in deterministic_issues if "_failed:" in i]
+    # Block outputs only on safety guardrail hard-fail signals.
+    blocking_issues = [i for i in safety_issues if "_failed:" in i]
     if blocking_issues:
         evaluator["deterministic_warnings"] = blocking_issues
 
-    output_blocked = False
+    output_blocked = bool(blocking_issues)
 
     extracted = dict(state.get("extracted_data") or {})
     extracted["guardrails"] = {

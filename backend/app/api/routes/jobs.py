@@ -2,6 +2,7 @@ import uuid
 from pathlib import Path
 from typing import List
 
+from celery import chain
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +15,7 @@ from app.models.candidate import Candidate
 from app.models.recruiter import Recruiter
 from app.models.scoring_job import ScoringJob
 from app.schemas.job import JobStatusResponse, ScoringJobResponse
-from app.services.tasks import run_scoring_pipeline
+from app.services.tasks import preprocess_jd, run_scoring_pipeline
 
 router = APIRouter()
 
@@ -244,14 +245,17 @@ async def add_candidates_to_job(
     # Persist rows before dispatching Celery.
     await db.commit()
 
-    # Dispatch Celery task for ONLY the newly added candidates.
-    task = run_scoring_pipeline.delay(
-        job_id=str(job_id),
-        recruiter_id=str(current.id),
-        jd_path=job.jd_path,
-        job_title=job_title,
-        candidates=candidate_payloads,
-    )
+    # Dispatch Celery chain for ONLY the newly added candidates.
+    task = chain(
+        preprocess_jd.si(job_id=str(job_id), jd_path=job.jd_path),
+        run_scoring_pipeline.si(
+            job_id=str(job_id),
+            recruiter_id=str(current.id),
+            jd_path=job.jd_path,
+            job_title=job_title,
+            candidates=candidate_payloads,
+        ),
+    ).apply_async()
     job.celery_task_id = task.id
     await db.flush()
     await db.commit()

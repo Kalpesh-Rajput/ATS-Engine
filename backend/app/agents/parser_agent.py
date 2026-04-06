@@ -10,6 +10,7 @@ from app.agents.prompts.templates import (
 )
 from app.agents.tools.llm_client import llm_call_json
 from app.agents.guardrails import validate_process_guardrails, validate_input_guardrails
+from app.core.config import settings
 from app.core.logging import logger
 from app.services.pdf_parser import extract_text_from_pdf
 from app.services.embedding_service import embed_document
@@ -88,7 +89,9 @@ def parser_agent(state: ATSState) -> ATSState:
     if not jd_text:
         jd_text = extract_text_from_pdf(state["jd_path"])
     resume_text = extract_text_from_pdf(state["resume_path"])
-    linkedin_text = extract_text_from_pdf(state["linkedin_path"])
+    # LinkedIn parsing is intentionally deferred to `linkedin_agent` so it can
+    # run in parallel with scorer and avoid extending parser critical path.
+    linkedin_text = state.get("linkedin_text", "") or ""
 
     if not jd_text:
         errors.append("Failed to extract text from JD PDF")
@@ -107,11 +110,12 @@ def parser_agent(state: ATSState) -> ATSState:
     # Parser runs before the fan-out to scorer + linkedin, so both can
     # reuse `resume_embedding` without embedding a second time.
     resume_embedding = None
-    try:
-        if resume_text:
-            resume_embedding = embed_document(resume_text)
-    except Exception as e:
-        errors.append(f"Resume embedding error: {e}")
+    if settings.SCORER_USE_EMBEDDINGS:
+        try:
+            if resume_text:
+                resume_embedding = embed_document(resume_text)
+        except Exception as e:
+            errors.append(f"Resume embedding error: {e}")
 
     # ─── Parse resume structure ───────────────────────────────────
     resume_data = {}
@@ -119,7 +123,9 @@ def parser_agent(state: ATSState) -> ATSState:
         try:
             resume_data = llm_call_json(
                 PARSER_SYSTEM,
-                PARSER_PROMPT.format(resume_text=resume_text[:4000]),
+                PARSER_PROMPT.format(
+                    resume_text=resume_text[:2000] if settings.PIPELINE_FAST_MODE else resume_text[:4000]
+                ),
             )
         except Exception as e:
             errors.append(f"Resume parse error: {e}")

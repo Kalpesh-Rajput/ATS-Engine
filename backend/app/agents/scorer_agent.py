@@ -1,10 +1,12 @@
 """Scorer agent: generates the ATS score via LLM + semantic similarity."""
+from difflib import SequenceMatcher
 import re
 
 from app.agents.state import ATSState
 from app.agents.prompts.templates import SCORER_PROMPT, SCORER_SYSTEM
 from app.agents.guardrails import validate_output_guardrails
 from app.agents.tools.llm_client import llm_call_json
+from app.core.config import settings
 from app.core.logging import logger
 from app.services.embedding_service import cosine_similarity, embed_document
 
@@ -24,6 +26,23 @@ def _normalize_for_match(s: str) -> str:
 
 def _tokenize(s: str) -> list[str]:
     return [t for t in _normalize_for_match(s).split() if t]
+
+
+def _partial_ratio(a: str, b: str) -> float:
+    """Approximate fuzzy partial ratio (0-100) without extra dependency."""
+    a = _normalize_for_match(a)
+    b = _normalize_for_match(b)
+    if not a or not b:
+        return 0.0
+    if len(a) > len(b):
+        a, b = b, a
+    window = len(a)
+    best = 0.0
+    for i in range(0, max(1, len(b) - window + 1)):
+        score = SequenceMatcher(None, a, b[i : i + window]).ratio()
+        if score > best:
+            best = score
+    return best * 100.0
 
 
 def _skill_matches(jd_skill: str, candidate_skills: list[str], resume_text: str) -> bool:
@@ -109,13 +128,16 @@ def scorer_agent(state: ATSState) -> ATSState:
     jd_emb = state.get("jd_embedding")
 
     try:
-        if not resume_emb and resume_text:
-            resume_emb = embed_document(resume_text)
-        if not jd_emb and jd_text:
-            jd_emb = embed_document(jd_text)
+        if settings.SCORER_USE_EMBEDDINGS:
+            if not resume_emb and resume_text:
+                resume_emb = embed_document(resume_text)
+            if not jd_emb and jd_text:
+                jd_emb = embed_document(jd_text)
 
-        if resume_emb and jd_emb:
-            semantic_score = cosine_similarity(resume_emb, jd_emb) * 100
+            if resume_emb and jd_emb:
+                semantic_score = cosine_similarity(resume_emb, jd_emb) * 100
+            else:
+                semantic_score = 50.0
         else:
             semantic_score = 50.0
     except Exception as e:
@@ -152,8 +174,8 @@ def scorer_agent(state: ATSState) -> ATSState:
         result = llm_call_json(
             SCORER_SYSTEM,
             SCORER_PROMPT.format(
-                jd_text=jd_text[:3000],
-                resume_text=resume_text[:3000],
+                jd_text=jd_text[:1500] if settings.PIPELINE_FAST_MODE else jd_text[:3000],
+                resume_text=resume_text[:1500] if settings.PIPELINE_FAST_MODE else resume_text[:3000],
                 required_skills=jd_required,
                 preferred_skills=jd_preferred,
                 candidate_skills=candidate_skills,
@@ -230,7 +252,7 @@ def scorer_agent(state: ATSState) -> ATSState:
         summary_lower = main_summary.lower()
         contradictory = []
         for s in skills_not_matched:
-            if s and s.lower() in summary_lower:
+            if s and _partial_ratio(s, summary_lower) >= 85.0:
                 contradictory.append(s)
 
         if contradictory:

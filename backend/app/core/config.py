@@ -30,18 +30,21 @@ class Settings(BaseSettings):
     # LLM
     GROQ_API_KEY: str
     GROQ_MODEL: str = "llama-3.1-8b-instant"
-    GROQ_MAX_TOKENS: int = 1024
+    GROQ_MAX_TOKENS: int = 2048
 
     # OpenRouter (OpenAI-compatible)
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
 
     # Embeddings
-    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+    EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
 
     # Pipeline performance tuning
     # Windows Celery often runs with `--pool=solo`; parallelism is achieved via threads inside tasks.
     CANDIDATE_PIPELINE_WORKERS: int = 4
+    PIPELINE_FAST_MODE: bool = True
+    SCORER_USE_EMBEDDINGS: bool = True
+    LINKEDIN_USE_EMBEDDINGS: bool = True
 
     # Files
     UPLOAD_DIR: str = "uploads"

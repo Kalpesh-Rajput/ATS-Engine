@@ -28,6 +28,7 @@ class ScoringJob(Base):
     failed_candidates: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     meta: Mapped[Optional[dict]] = mapped_column(JSONB)
+    jd_parsed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

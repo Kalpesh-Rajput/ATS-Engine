@@ -1,18 +1,22 @@
 """LinkedIn consistency agent: compares resume vs LinkedIn profile."""
 from app.agents.state import ATSState
+from app.core.config import settings
 from app.core.logging import logger
 from app.services.embedding_service import cosine_similarity, embed_document
+from app.services.pdf_parser import extract_text_from_pdf
 
 
 def linkedin_agent(state: ATSState) -> ATSState:
     """
     Node 2b — LinkedIn Agent (runs in parallel with Scorer agent)
-    Checks profile consistency and issues a green/red flag.
+    Checks profile consistency and issues a red/orange/green flag.
     """
     logger.info("linkedin_agent_start", candidate_id=state["candidate_id"])
 
     resume_text = state.get("resume_text", "")
     linkedin_text = state.get("linkedin_text", "")
+    if not linkedin_text and state.get("linkedin_path"):
+        linkedin_text = extract_text_from_pdf(state["linkedin_path"]) or ""
 
     if not linkedin_text:
         return {
@@ -23,17 +27,35 @@ def linkedin_agent(state: ATSState) -> ATSState:
         }
 
     try:
-        resume_emb = state.get("resume_embedding")
-        if not resume_emb:
-            resume_emb = embed_document(resume_text) if resume_text else None
-        linkedin_emb = embed_document(linkedin_text)
+        linkedin_emb = None
+        if settings.LINKEDIN_USE_EMBEDDINGS:
+            resume_emb = state.get("resume_embedding")
+            if not resume_emb:
+                resume_emb = embed_document(resume_text) if resume_text else None
+            linkedin_emb = embed_document(linkedin_text)
 
-        # Fast embedding-based consistency score.
-        if resume_emb:
-            score = round(max(0.0, min(100.0, cosine_similarity(resume_emb, linkedin_emb) * 100)), 1)
+            # Embedding-based consistency score (higher quality, higher latency).
+            if resume_emb:
+                score = round(max(0.0, min(100.0, cosine_similarity(resume_emb, linkedin_emb) * 100)), 1)
+            else:
+                score = 70.0
         else:
-            score = 70.0
-        flag = "green" if score >= 70 else "red"
+            # Fast lexical consistency path for low-latency scoring.
+            resume_tokens = {t for t in (resume_text or "").lower().split() if len(t) > 2}
+            linkedin_tokens = {t for t in (linkedin_text or "").lower().split() if len(t) > 2}
+            if resume_tokens and linkedin_tokens:
+                overlap = len(resume_tokens & linkedin_tokens) / max(
+                    1, min(len(resume_tokens), len(linkedin_tokens))
+                )
+                score = round(max(0.0, min(100.0, overlap * 100)), 1)
+            else:
+                score = 70.0
+        if score < 40:
+            flag = "red"
+        elif score <= 70:
+            flag = "orange"
+        else:
+            flag = "green"
 
         # Deterministic short narrative (fast, no LLM).
         # This is written to match the UI style you showed earlier.

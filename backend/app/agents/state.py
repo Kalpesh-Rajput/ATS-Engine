@@ -42,7 +42,7 @@ class ATSState(TypedDict):
     # ─── LinkedIn agent output ───────────────────────────────────
     linkedin_match_score: Optional[float]
     linkedin_summary: Optional[str]
-    linkedin_flag: Optional[str]          # "green" | "red"
+    linkedin_flag: Optional[str]          # "green" | "orange" | "red"
 
     # ─── Embeddings (for Faiss) ──────────────────────────────────
     resume_embedding: Optional[List[float]]

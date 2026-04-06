@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.core.config import settings
 
 celery_app = Celery(
@@ -18,4 +19,10 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     result_expires=86400,  # 24 hours
+    beat_schedule={
+        "reset-stuck-scoring-jobs-every-5-min": {
+            "task": "app.services.tasks.reset_stuck_scoring_jobs",
+            "schedule": crontab(minute="*/5"),
+        }
+    },
 )

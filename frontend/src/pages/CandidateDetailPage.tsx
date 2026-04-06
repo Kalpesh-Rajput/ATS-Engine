@@ -89,11 +89,15 @@ export default function CandidateDetailPage() {
               <p className="text-xs text-slate-500 mb-1">ATS Score</p>
               <span
                 className={
-                  c.linkedin_flag === 'green' ? 'badge-green text-sm' : 'badge-red text-sm'
+                  c.linkedin_flag === 'green'
+                    ? 'badge-green text-sm'
+                    : c.linkedin_flag === 'orange'
+                      ? 'badge-orange text-sm'
+                      : 'badge-red text-sm'
                 }
               >
                 <Flag className="w-3.5 h-3.5" />
-                LinkedIn {c.linkedin_flag === 'green' ? 'Green Flag' : 'Red Flag'}
+                LinkedIn {c.linkedin_flag === 'green' ? 'Green Flag' : c.linkedin_flag === 'orange' ? 'Orange Flag' : 'Red Flag'}
               </span>
             </div>
           </div>
@@ -122,7 +126,13 @@ export default function CandidateDetailPage() {
             <div className="flex items-center gap-2 mb-2">
               <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                 <div
-                  className={`h-full rounded-full ${c.linkedin_flag === 'green' ? 'bg-emerald-500' : 'bg-red-400'}`}
+                  className={`h-full rounded-full ${
+                    c.linkedin_flag === 'green'
+                      ? 'bg-emerald-500'
+                      : c.linkedin_flag === 'orange'
+                        ? 'bg-amber-400'
+                        : 'bg-red-400'
+                  }`}
                   style={{ width: `${c.linkedin_match_score}%` }}
                 />
               </div>

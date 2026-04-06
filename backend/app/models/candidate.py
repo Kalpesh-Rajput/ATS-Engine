@@ -40,7 +40,7 @@ class Candidate(Base):
     # Summaries
     main_summary: Mapped[Optional[str]] = mapped_column(Text)
     linkedin_summary: Mapped[Optional[str]] = mapped_column(Text)
-    linkedin_flag: Mapped[Optional[str]] = mapped_column(String(10))  # "green" | "red"
+    linkedin_flag: Mapped[Optional[str]] = mapped_column(String(10))  # "green" | "orange" | "red"
 
     # Structured JSON fields
     skills_matched: Mapped[Optional[dict]] = mapped_column(JSONB)      # list[str]

@@ -1,5 +1,6 @@
 """Singleton embedding service backed by sentence-transformers."""
 from functools import lru_cache
+import re
 from typing import List
 
 import numpy as np
@@ -28,9 +29,9 @@ def embed_document(text: str) -> List[float]:
     """
     Embed long documents by chunking + mean pooling.
 
-    - Chunk size: 900 characters
-    - Overlap: 150 characters
-    - Encode all chunks in a single model.encode batch call
+    - Prefer paragraph/sentence-aware segmentation
+    - Group segments into ~900-char chunks
+    - Encode all chunks in one batch call
     - Mean-pool chunk vectors then return one final L2-normalized vector
     """
     t = text or ""
@@ -43,19 +44,35 @@ def embed_document(text: str) -> List[float]:
         return np.array(vec, dtype=np.float32).tolist()
 
     chunk_size = 900
-    overlap = 150
-    if overlap >= chunk_size:
-        overlap = max(0, chunk_size - 1)
+    # Prefer semantic boundaries over raw character windows.
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", t) if p.strip()]
+    if not paragraphs:
+        paragraphs = [t]
+    segments: List[str] = []
+    for p in paragraphs:
+        sentences = [
+            s.strip()
+            for s in re.split(r"(?<=[.!?])\s+|\n+", p)
+            if s and s.strip()
+        ]
+        if not sentences:
+            sentences = [p]
+        segments.extend(sentences)
 
     chunks: List[str] = []
-    start = 0
-    n = len(t)
-    while start < n:
-        end = min(n, start + chunk_size)
-        chunks.append(t[start:end])
-        if end >= n:
-            break
-        start = end - overlap
+    cur: List[str] = []
+    cur_len = 0
+    for seg in segments:
+        seg_len = len(seg)
+        if cur and (cur_len + seg_len + 1 > chunk_size):
+            chunks.append(" ".join(cur))
+            cur = [seg]
+            cur_len = seg_len
+        else:
+            cur.append(seg)
+            cur_len += seg_len + (1 if cur_len else 0)
+    if cur:
+        chunks.append(" ".join(cur))
 
     model = _get_model()
     # Do NOT normalize per-chunk; we want mean pooling then normalize once.
