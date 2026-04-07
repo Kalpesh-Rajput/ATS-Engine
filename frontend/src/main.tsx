@@ -21,9 +21,16 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <Toaster
         position="top-right"
         toastOptions={{
-          className: 'text-sm',
-          success: { duration: 3000 },
-          error: { duration: 5000 },
+          className:
+            '!text-sm !rounded-xl !border !border-gray-200/90 !bg-white !text-gray-900 !shadow-lg !px-4 !py-3 !font-medium',
+          success: {
+            duration: 3000,
+            iconTheme: { primary: '#059669', secondary: '#fff' },
+          },
+          error: {
+            duration: 5000,
+            iconTheme: { primary: '#e11d48', secondary: '#fff' },
+          },
         }}
       />
     </QueryClientProvider>

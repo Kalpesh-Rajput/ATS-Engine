@@ -35,6 +35,9 @@ async def upload_and_trigger(
     resumes: List[UploadFile] = File(..., description="Candidate resume PDFs"),
     linkedin_profiles: List[UploadFile] = File(..., description="LinkedIn profile PDFs (same order as resumes)"),
     job_title: str = Form(...),
+    client_name: str | None = Form(None),
+    session_name: str | None = Form(None),
+    job_description_text: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     current: Recruiter = Depends(get_current_recruiter),
 ):
@@ -92,9 +95,14 @@ async def upload_and_trigger(
         id=job_id,
         recruiter_id=current.id,
         jd_path=jd_path,
+        jd_text=job_description_text if job_description_text else None,
         status="pending",
         total_candidates=len(resumes),
-        meta={"job_title": job_title},
+        meta={
+            "job_title": job_title,
+            **({"client_name": client_name} if client_name else {}),
+            **({"session_name": session_name} if session_name else {}),
+        },
     )
     db.add(scoring_job)
     await db.flush()

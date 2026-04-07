@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from pydantic import BaseModel
 
@@ -11,6 +11,7 @@ class ScoringJobResponse(BaseModel):
     celery_task_id: Optional[str] = None
     jd_path: Optional[str] = None
     job_title: Optional[str] = None
+    meta: Optional[dict] = None
     status: str
     total_candidates: int
     processed_candidates: int
@@ -30,3 +31,12 @@ class JobStatusResponse(BaseModel):
     processed: int
     failed: int
     completed_at: Optional[datetime] = None
+
+
+class ClientAnalyticsResponse(BaseModel):
+    total_clients: int
+    total_resumes_all_clients: int
+    total_selected_all_clients: int
+    average_conversion_rate: float
+    client_metrics: List[Dict[str, Any]]
+    timeline_data: List[Dict[str, Any]]

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ChevronRight, Flag, Loader2, Plus, Upload, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { candidateService, jobService } from '../services/apiServices'
+import { useAuthStore } from '../store/authStore'
 import JobStatusBadge from '../components/dashboard/JobStatusBadge'
 import ScoreRing from '../components/candidates/ScoreRing'
 
@@ -20,9 +21,30 @@ function newRow(): CandidateRow {
 export default function JobResultsPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const navigate = useNavigate()
+  const userRole = useAuthStore((s) => s.userRole)
+  const baseRole = userRole === 'admin' ? '/admin' : '/user'
   const [minScore, setMinScore] = useState<number>(0)
   const [isAdding, setIsAdding] = useState(false)
   const [rows, setRows] = useState<CandidateRow[]>([newRow()])
+  const queryClient = useQueryClient()
+
+  const statusOptions = [
+    { value: 'in_process', label: 'In Process' },
+    { value: 'shortlisted', label: 'Shortlisted' },
+    { value: 'not_shortlisted', label: 'Not Shortlisted' },
+    { value: 'selected', label: 'Selected' },
+  ]
+
+  const reviewStatusMutation = useMutation({
+    mutationFn: ({ candidateId, review_status }: { candidateId: string; review_status: string }) =>
+      candidateService.updateReviewStatus(candidateId, review_status),
+    onSuccess: () => {
+      toast.success('Status updated')
+      queryClient.invalidateQueries({ queryKey: ['job', jobId] })
+      queryClient.invalidateQueries({ queryKey: ['candidates', jobId] })
+    },
+    onError: () => toast.error('Failed to update status'),
+  })
 
   const addRow = () => setRows((r) => [...r, newRow()])
   const updateRow = (id: string, field: 'resume' | 'linkedin', file: File | null) =>
@@ -32,8 +54,10 @@ export default function JobResultsPage() {
   const { data: job, refetch: refetchJob } = useQuery({
     queryKey: ['job', jobId],
     queryFn: () => jobService.getJob(jobId!),
-    refetchInterval: (data) =>
-      data?.status === 'completed' || data?.status === 'failed' ? false : 3000,
+    refetchInterval: (query) => {
+      const jobData = query.state.data;
+      return jobData?.status === 'completed' || jobData?.status === 'failed' ? false : 3000;
+    },
   })
 
   const { data: candidateData, refetch: refetchCandidates } = useQuery({
@@ -90,7 +114,7 @@ export default function JobResultsPage() {
       {/* Header */}
       <div className="flex items-center gap-4">
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate(`${baseRole}/dashboard`)}
           className="btn-secondary p-2"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -120,8 +144,8 @@ export default function JobResultsPage() {
 
       {/* Add candidates modal */}
       {isAdding && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-3xl bg-white rounded-xl shadow-lg border border-slate-200 p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-3xl space-y-4 rounded-2xl border border-gray-200/90 bg-white p-6 shadow-2xl ring-1 ring-black/5 animate-scale-in">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Add Job Candidates</h2>
@@ -193,7 +217,7 @@ export default function JobResultsPage() {
         <div className="card p-5 space-y-3">
           <div className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-2 text-slate-600">
-              <Loader2 className="w-4 h-4 animate-spin text-brand-600" />
+              <Loader2 className="w-4 h-4 animate-spin text-primary-600" />
               Scoring candidates…
             </span>
             <span className="font-medium text-slate-900">
@@ -202,7 +226,7 @@ export default function JobResultsPage() {
           </div>
           <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
             <div
-              className="h-full bg-brand-600 rounded-full transition-all duration-700"
+              className="h-full bg-primary-600 rounded-full transition-all duration-700"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -222,7 +246,7 @@ export default function JobResultsPage() {
               step={5}
               value={minScore}
               onChange={(e) => setMinScore(Number(e.target.value))}
-              className="w-32 accent-brand-600"
+              className="w-32 accent-primary-600"
             />
             <span className="font-medium w-10 text-slate-900">{minScore}%</span>
           </label>
@@ -242,21 +266,23 @@ export default function JobResultsPage() {
           {candidates.map((c: any) => (
             <div
               key={c.id}
-              onClick={() => navigate(`/candidates/${c.id}`)}
-              className="flex items-center gap-5 px-6 py-4 hover:bg-slate-50 cursor-pointer transition-colors"
+              className="flex items-center gap-5 px-6 py-4 hover:bg-slate-50 transition-colors"
             >
               {/* Score ring */}
               <ScoreRing score={c.ats_score ?? 0} size={52} />
 
               {/* Info */}
-              <div className="flex-1 min-w-0">
+              <Link
+                to={`${baseRole}/candidates/${c.id}`}
+                className="flex-1 min-w-0 space-y-1 cursor-pointer"
+              >
                 <p className="font-medium text-slate-900 truncate">
                   {c.name ?? 'Unknown Candidate'}
                 </p>
                 <p className="text-xs text-slate-500 truncate mt-0.5">
                   {[c.email, c.location].filter(Boolean).join(' · ')}
                 </p>
-              </div>
+              </Link>
 
               {/* Skills matched */}
               <div className="hidden sm:flex flex-wrap gap-1 max-w-xs justify-end">
@@ -269,18 +295,30 @@ export default function JobResultsPage() {
               </div>
 
               {/* LinkedIn flag */}
-              <span
-                className={
-                  c.linkedin_flag === 'green'
-                    ? 'badge-green'
-                    : c.linkedin_flag === 'orange'
-                      ? 'badge-orange'
-                      : 'badge-red'
-                }
-              >
+              <span className={c.linkedin_flag === 'green' ? 'badge-green' : 'badge-red'}>
                 <Flag className="w-3 h-3" />
-                {c.linkedin_flag === 'green' ? 'Green' : c.linkedin_flag === 'orange' ? 'Orange' : 'Red'}
+                {c.linkedin_flag === 'green' ? 'Green' : 'Red'}
               </span>
+
+              {/* Status dropdown */}
+              <select
+                value={c.review_status || 'in_process'}
+                onChange={(e) => {
+                  e.stopPropagation()
+                  reviewStatusMutation.mutate({
+                    candidateId: c.id,
+                    review_status: e.target.value,
+                  })
+                }}
+                disabled={reviewStatusMutation.isPending}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
+              >
+                {statusOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
 
               <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
             </div>

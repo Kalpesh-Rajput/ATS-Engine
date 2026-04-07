@@ -25,10 +25,14 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
     current: Recruiter = Depends(get_current_recruiter),
 ):
-    if payload.user_name:
-        current.user_name = payload.user_name
-    if payload.email:
-        current.email = payload.email
+    update_data = payload.model_dump(exclude_unset=True)
+    # Prevent recruiters from changing admin-only fields via /me
+    update_data.pop("is_admin", None)
+    update_data.pop("is_active", None)
+
+    for field, value in update_data.items():
+        setattr(current, field, value)
+
     await db.flush()
     return current
 
@@ -48,6 +52,68 @@ async def get_stats(
     )
 
 
+@router.get("/{recruiter_id}", response_model=RecruiterResponse)
+async def get_recruiter_by_id(
+    recruiter_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: Recruiter = Depends(get_current_recruiter),
+):
+    recruiter = await db.get(Recruiter, recruiter_id)
+    if not recruiter:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recruiter not found")
+    if recruiter.id != current.id and not current.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return recruiter
+
+
+@router.put("/{recruiter_id}", response_model=RecruiterResponse)
+async def update_recruiter(
+    recruiter_id: uuid.UUID,
+    payload: RecruiterUpdate,
+    db: AsyncSession = Depends(get_db),
+    current: Recruiter = Depends(get_current_recruiter),
+):
+    recruiter = await db.get(Recruiter, recruiter_id)
+    if not recruiter:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recruiter not found")
+    if recruiter.id != current.id and not current.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    update_data = payload.model_dump(exclude_unset=True)
+    if not current.is_admin:
+        update_data.pop("is_admin", None)
+        update_data.pop("is_active", None)
+
+    for field, value in update_data.items():
+        setattr(recruiter, field, value)
+
+    await db.flush()
+    await db.refresh(recruiter)
+    return recruiter
+
+
+@router.get("/{recruiter_id}/stats", response_model=RecruiterStats)
+async def get_recruiter_stats(
+    recruiter_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: Recruiter = Depends(get_current_recruiter),
+):
+    recruiter = await db.get(Recruiter, recruiter_id)
+    if not recruiter:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recruiter not found")
+    if recruiter.id != current.id and not current.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    job_count = await db.scalar(
+        select(func.count(ScoringJob.id)).where(ScoringJob.recruiter_id == recruiter.id)
+    )
+    return RecruiterStats(
+        total_resumes_uploaded=recruiter.total_resumes_uploaded,
+        total_shortlisted=recruiter.total_shortlisted,
+        total_jobs=job_count or 0,
+    )
+
+
 # ─── Admin-only ──────────────────────────────────────────────────
 
 @router.post("/", response_model=RecruiterResponse, status_code=status.HTTP_201_CREATED)
@@ -63,6 +129,11 @@ async def create_recruiter(
         user_name=payload.user_name,
         email=payload.email,
         hashed_password=hash_password(payload.password),
+        post=payload.post,
+        phone=payload.phone,
+        department=payload.department,
+        location=payload.location,
+        join_date=payload.join_date,
     )
     db.add(recruiter)
     await db.flush()
@@ -89,3 +160,4 @@ async def delete_recruiter(
     if not r:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recruiter not found")
     await db.delete(r)
+    await db.commit()

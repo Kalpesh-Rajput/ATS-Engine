@@ -10,12 +10,16 @@ interface Recruiter {
   total_shortlisted: number
 }
 
+type UserRole = 'user' | 'admin'
+
 interface AuthState {
   accessToken: string | null
   refreshToken: string | null
   recruiter: Recruiter | null
+  userRole: UserRole | null
   setTokens: (access: string, refresh: string) => void
   setRecruiter: (r: Recruiter) => void
+  setUserRole: (role: UserRole) => void
   logout: () => void
 }
 
@@ -25,14 +29,22 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       refreshToken: null,
       recruiter: null,
+      userRole: null,
 
       setTokens: (access, refresh) =>
         set({ accessToken: access, refreshToken: refresh }),
 
       setRecruiter: (recruiter) => set({ recruiter }),
 
+      setUserRole: (userRole) => set({ userRole }),
+
       logout: () =>
-        set({ accessToken: null, refreshToken: null, recruiter: null }),
+        set({ 
+          accessToken: null, 
+          refreshToken: null, 
+          recruiter: null,
+          userRole: null 
+        }),
     }),
     { name: 'ats-auth' }
   )

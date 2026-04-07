@@ -1,9 +1,9 @@
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from celery import chain
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, status, File, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ from app.agents.guardrails import has_prompt_injection
 from app.models.candidate import Candidate
 from app.models.recruiter import Recruiter
 from app.models.scoring_job import ScoringJob
-from app.schemas.job import JobStatusResponse, ScoringJobResponse
+from app.schemas.job import JobStatusResponse, ScoringJobResponse, ClientAnalyticsResponse
 from app.services.tasks import preprocess_jd, run_scoring_pipeline
 
 router = APIRouter()
@@ -30,14 +30,18 @@ def _save_file(content: bytes, dest: Path) -> str:
 
 @router.get("/", response_model=list[ScoringJobResponse])
 async def list_jobs(
+    recruiter_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current: Recruiter = Depends(get_current_recruiter),
 ):
-    result = await db.execute(
-        select(ScoringJob)
-        .where(ScoringJob.recruiter_id == current.id)
-        .order_by(ScoringJob.created_at.desc())
-    )
+    q = select(ScoringJob)
+    if current.is_admin:
+        if recruiter_id:
+            q = q.where(ScoringJob.recruiter_id == recruiter_id)
+    else:
+        q = q.where(ScoringJob.recruiter_id == current.id)
+
+    result = await db.execute(q.order_by(ScoringJob.created_at.desc()))
     jobs = result.scalars().all()
     out: list[ScoringJobResponse] = []
     for j in jobs:
@@ -58,6 +62,7 @@ async def list_jobs(
                 celery_task_id=j.celery_task_id,
                 jd_path=j.jd_path,
                 job_title=job_title,
+                meta=j.meta,
                 status=j.status,
                 total_candidates=j.total_candidates,
                 processed_candidates=j.processed_candidates,
@@ -77,7 +82,7 @@ async def get_job_status(
     current: Recruiter = Depends(get_current_recruiter),
 ):
     job = await db.get(ScoringJob, job_id)
-    if not job or str(job.recruiter_id) != str(current.id):
+    if not job or (not current.is_admin and str(job.recruiter_id) != str(current.id)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
     progress = 0.0
@@ -102,7 +107,7 @@ async def get_job(
     current: Recruiter = Depends(get_current_recruiter),
 ):
     job = await db.get(ScoringJob, job_id)
-    if not job or str(job.recruiter_id) != str(current.id):
+    if not job or (not current.is_admin and str(job.recruiter_id) != str(current.id)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     job_title = (job.meta or {}).get("job_title") if job.meta else None
     if not job_title:
@@ -118,6 +123,7 @@ async def get_job(
         celery_task_id=job.celery_task_id,
         jd_path=job.jd_path,
         job_title=job_title,
+        meta=job.meta,
         status=job.status,
         total_candidates=job.total_candidates,
         processed_candidates=job.processed_candidates,
@@ -125,6 +131,89 @@ async def get_job(
         error_message=job.error_message,
         created_at=job.created_at,
         completed_at=job.completed_at,
+    )
+
+
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: Recruiter = Depends(get_current_recruiter),
+):
+    job = await db.get(ScoringJob, job_id)
+    if not job or (not current.is_admin and str(job.recruiter_id) != str(current.id)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    await db.delete(job)
+    await db.commit()
+
+
+@router.get("/analytics/client-performance", response_model=ClientAnalyticsResponse)
+async def get_client_analytics(
+    recruiter_id: Optional[uuid.UUID] = Query(None, description="Filter by recruiter ID (admin only)"),
+    db: AsyncSession = Depends(get_db),
+    current: Recruiter = Depends(get_current_recruiter),
+):
+    target_recruiter_id = recruiter_id if recruiter_id and current.is_admin else current.id
+
+    result = await db.execute(
+        select(ScoringJob)
+        .where(ScoringJob.recruiter_id == target_recruiter_id)
+        .order_by(ScoringJob.created_at.asc())
+    )
+    jobs = result.scalars().all()
+
+    client_data = {}
+    timeline_counts = {}
+    
+    for job in jobs:
+        client_name = (job.meta or {}).get("client_name") or "Unknown Client"
+        if client_name not in client_data:
+            client_data[client_name] = {
+                "total_sessions": 0,
+                "total_resumes": 0,
+                "total_selected": 0,
+            }
+        client_data[client_name]["total_sessions"] += 1
+        client_data[client_name]["total_resumes"] += job.total_candidates
+        client_data[client_name]["total_selected"] += max(0, int(job.processed_candidates * 0.3))
+
+        date_str = job.created_at.strftime("%Y-%m-%d")
+        timeline_counts[date_str] = timeline_counts.get(date_str, 0) + job.total_candidates
+
+    client_metrics = []
+    total_resumes = 0
+    total_selected = 0
+    for client_name, data in client_data.items():
+        conversion = 0.0
+        if data["total_resumes"] > 0:
+            conversion = round((data["total_selected"] / data["total_resumes"]) * 100, 2)
+        client_metrics.append({
+            "client_name": client_name,
+            "total_sessions": data["total_sessions"],
+            "total_resumes": data["total_resumes"],
+            "total_selected": data["total_selected"],
+            "conversion_rate": conversion,
+        })
+        total_resumes += data["total_resumes"]
+        total_selected += data["total_selected"]
+
+    avg_conversion = 0.0
+    if total_resumes > 0:
+        avg_conversion = round((total_selected / total_resumes) * 100, 2)
+
+    timeline_data = [
+        {"date": date, "value": count}
+        for date, count in sorted(timeline_counts.items())
+    ]
+
+    return ClientAnalyticsResponse(
+        total_clients=len(client_data),
+        total_resumes_all_clients=total_resumes,
+        total_selected_all_clients=total_selected,
+        average_conversion_rate=avg_conversion,
+        client_metrics=client_metrics,
+        timeline_data=timeline_data,
     )
 
 
@@ -266,6 +355,7 @@ async def add_candidates_to_job(
         celery_task_id=job.celery_task_id,
         jd_path=job.jd_path,
         job_title=job_title,
+        meta=job.meta,
         status=job.status,
         total_candidates=job.total_candidates,
         processed_candidates=job.processed_candidates,

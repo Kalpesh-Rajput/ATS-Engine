@@ -29,6 +29,9 @@ class CandidateResponse(CandidateBase):
     pros: Optional[List[str]] = None
     cons: Optional[List[str]] = None
     status: str
+    review_status: str
+    client_name: Optional[str] = None
+    job_role: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

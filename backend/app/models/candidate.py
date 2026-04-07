@@ -52,6 +52,9 @@ class Candidate(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     # pending | processing | completed | failed
 
+    review_status: Mapped[str] = mapped_column(String(20), default="in_process", nullable=False)
+    # in_process | shortlisted | not_shortlisted | selected
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -62,3 +65,15 @@ class Candidate(Base):
     # Relationships
     recruiter: Mapped["Recruiter"] = relationship(back_populates="candidates")  # noqa: F821
     scoring_job: Mapped[Optional["ScoringJob"]] = relationship(back_populates="candidates")  # noqa: F821
+
+    @property
+    def client_name(self) -> Optional[str]:
+        if self.scoring_job and self.scoring_job.meta:
+            return self.scoring_job.meta.get("client_name")
+        return None
+
+    @property
+    def job_role(self) -> Optional[str]:
+        if self.scoring_job and self.scoring_job.meta:
+            return self.scoring_job.meta.get("session_name") or self.job_applied
+        return self.job_applied
