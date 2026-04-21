@@ -42,7 +42,10 @@ interface FileDropProps {
 
 function FileDrop({ label, sublabel, file, onDrop, onRemove, icon }: FileDropProps) {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    accept: { 'application/pdf': ['.pdf'] },
+    accept: {
+      'application/pdf': ['.pdf'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+    },
     maxFiles: 1,
     onDrop: (accepted) => accepted[0] && onDrop(accepted[0]),
   })
@@ -115,12 +118,14 @@ export default function UploadPage() {
 
     const incomplete = rows.filter((r) => !r.resume || !r.linkedin)
     if (incomplete.length > 0) {
-      return toast.error('Every candidate needs both a resume and LinkedIn PDF')
+      return toast.error('Every candidate needs both a resume and LinkedIn document')
     }
 
     const form = new FormData()
     const sessionName = `${clientName.trim()} - ${jobTitle.trim()}`
-    form.append('job_description', jdFile!)
+    if (jdFile) {
+      form.append('job_description', jdFile)
+    }
     form.append('session_name', sessionName)
     form.append('job_title', jobTitle.trim())
     form.append('client_name', clientName.trim())
@@ -199,7 +204,7 @@ export default function UploadPage() {
             <label className="label">Job Description</label>
             <div className="grid grid-cols-2 gap-4">
               <FileDrop
-                label="Upload PDF"
+                label="Upload document"
                 sublabel="Drag & drop or click to browse"
                 file={jdFile}
                 onDrop={setJdFile}
@@ -219,7 +224,7 @@ export default function UploadPage() {
             {!jdFile && !jdText && (
               <p className="text-xs text-gray-500 flex items-center gap-1.5">
                 <AlertCircle className="w-3.5 h-3.5" />
-                Either upload a PDF or paste the job description text
+                Either upload a document or paste the job description text
               </p>
             )}
           </div>
@@ -245,11 +250,11 @@ export default function UploadPage() {
           <div className="grid grid-cols-[1fr_1fr_auto] gap-4 mb-3 px-1">
             <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wide">
               <User className="w-4 h-4" />
-              Resume PDF
+              Resume
             </div>
             <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wide">
               <Linkedin className="w-4 h-4" />
-              LinkedIn Profile PDF
+              LinkedIn Profile
             </div>
             <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
               Action
@@ -262,7 +267,7 @@ export default function UploadPage() {
               <div key={row.id} className="grid grid-cols-[1fr_1fr_auto] gap-4 items-center">
                 <FileDrop
                   label={`Resume ${idx + 1}`}
-                  sublabel={row.resume?.name || 'PDF required'}
+                  sublabel={row.resume?.name || 'Document required'}
                   file={row.resume}
                   onDrop={(f) => updateRow(row.id, 'resume', f)}
                   onRemove={() => updateRow(row.id, 'resume', null)}
@@ -270,7 +275,7 @@ export default function UploadPage() {
                 />
                 <FileDrop
                   label={`LinkedIn ${idx + 1}`}
-                  sublabel={row.linkedin?.name || 'PDF required'}
+                  sublabel={row.linkedin?.name || 'Document required'}
                   file={row.linkedin}
                   onDrop={(f) => updateRow(row.id, 'linkedin', f)}
                   onRemove={() => updateRow(row.id, 'linkedin', null)}
@@ -315,7 +320,7 @@ export default function UploadPage() {
             <Button
               onClick={handleSubmit}
               disabled={
-                loading || !jdFile || !jobTitle || !clientName || readyCount === 0
+                loading || (!jdFile && !jdText.trim()) || !jobTitle || !clientName || readyCount === 0
               }
               isLoading={loading}
               leftIcon={<Upload className="w-4 h-4" />}

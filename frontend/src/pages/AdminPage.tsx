@@ -212,6 +212,18 @@ export default function AdminPage() {
     mutationFn: (id: string) => jobService.adminDeleteJob(id),
     onSuccess: () => {
       toast.success('Session deleted successfully')
+      // Invalidate all job-related queries
+      queryClient.invalidateQueries({ queryKey: ['all-jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      // Invalidate recruiter stats to update dashboard metrics
+      queryClient.invalidateQueries({ queryKey: ['recruiter-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['recruiters'] })
+      // Invalidate client analytics
+      queryClient.invalidateQueries({ queryKey: ['client-analytics'] })
+      // Invalidate candidate queries
+      queryClient.invalidateQueries({ queryKey: ['all-candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['candidate-count'] })
       refetchJobs()
       setIsDeleteJobModalOpen(false)
       setSelectedJob(null)

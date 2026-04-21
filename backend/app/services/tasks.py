@@ -264,6 +264,20 @@ def run_scoring_pipeline(
                             candidate.pros = state.get("pros", [])
                             candidate.cons = state.get("cons", [])
                             candidate.extracted_data = state.get("extracted_data", {})
+
+                            # KPI Evaluation fields
+                            candidate.evaluation_breakdown = state.get("evaluation_breakdown")
+                            candidate.kpi_validation = state.get("kpi_validation")
+
+                            # Fit Analysis fields
+                            candidate.compatibility_assessment = state.get("compatibility_assessment")
+                            candidate.fit_reasoning = state.get("fit_reasoning")
+                            candidate.key_signals = state.get("key_signals")
+                            candidate.strengths = state.get("strengths")
+                            candidate.gaps = state.get("gaps")
+                            candidate.fit_validation = state.get("fit_validation")
+                            candidate.fit_analysis_debug = state.get("fit_analysis_debug")
+
                             candidate.status = "completed"
                             processed += 1
                         except Exception as exc:

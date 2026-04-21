@@ -127,21 +127,18 @@ export default function AddRecruiterPage() {
                 {/* Post */}
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Position *</label>
-                  <select
-                    name="post"
-                    className="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
-                    value={formData.post}
-                    onChange={handleInputChange}
-                    required
-                  >
-                    <option value="">Select Position</option>
-                    <option value="Junior Recruiter">Junior Recruiter</option>
-                    <option value="Recruiter">Recruiter</option>
-                    <option value="Senior Recruiter">Senior Recruiter</option>
-                    <option value="Lead Recruiter">Lead Recruiter</option>
-                    <option value="Talent Manager">Talent Manager</option>
-                    <option value="HR Manager">HR Manager</option>
-                  </select>
+                  <div className="relative">
+                    <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="text"
+                      name="post"
+                      className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+                      placeholder="e.g., Senior Recruiter"
+                      value={formData.post}
+                      onChange={handleInputChange}
+                      required
+                    />
+                  </div>
                 </div>
 
                 {/* Department */}

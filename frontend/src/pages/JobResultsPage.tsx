@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ChevronRight, Flag, Loader2, Plus, Upload, X } from 'lucide-react'
+import { ArrowLeft, ChevronRight, Flag, Loader2, Plus, Trash2, Upload, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { candidateService, jobService } from '../services/apiServices'
 import { useAuthStore } from '../store/authStore'
@@ -29,6 +29,7 @@ export default function JobResultsPage() {
   const queryClient = useQueryClient()
 
   const statusOptions = [
+    { value: '', label: 'Choose Status', disabled: true },
     { value: 'in_process', label: 'In Process' },
     { value: 'shortlisted', label: 'Shortlisted' },
     { value: 'not_shortlisted', label: 'Not Shortlisted' },
@@ -45,6 +46,94 @@ export default function JobResultsPage() {
     },
     onError: () => toast.error('Failed to update status'),
   })
+
+  const deleteCandidateMutation = useMutation({
+    mutationFn: (candidateId: string) => candidateService.deleteCandidate(candidateId),
+    onSuccess: () => {
+      toast.success('Candidate deleted successfully')
+      // Invalidate all candidate-related queries to reflect deletion everywhere
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey
+          if (!Array.isArray(key)) return false
+          return ['candidates', 'candidate-count', 'candidate'].includes(key[0] as string)
+        },
+      })
+      queryClient.invalidateQueries({ queryKey: ['job', jobId] })
+      queryClient.invalidateQueries({ queryKey: ['recruiter-stats'] })
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to delete candidate')
+    },
+  })
+
+  const handleDeleteCandidate = (candidateId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (window.confirm('Are you sure you want to delete this candidate? This action cannot be undone.')) {
+      deleteCandidateMutation.mutate(candidateId)
+    }
+  }
+
+  const cancelJobMutation = useMutation({
+    mutationFn: (jobId: string) => jobService.cancelJob(jobId),
+    onSuccess: () => {
+      // Show brief toast notification (2-3 seconds)
+      toast.success('Job cancelled', { duration: 2500 })
+      // Invalidate ALL queries to ensure no stale job/candidate data remains
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey
+          if (!Array.isArray(key)) return true
+          // Invalidate job, candidate, and stats related queries
+          const invalidateKeys = ['job', 'jobs', 'candidates', 'candidate', 'recruiter-stats']
+          return invalidateKeys.some(k => key[0] === k)
+        },
+      })
+      // Reset queries cache completely to remove any cancelled job data
+      queryClient.refetchQueries({ queryKey: ['jobs'] })
+      // Navigate to dashboard immediately
+      navigate(`${baseRole}/dashboard`)
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to cancel job')
+    },
+  })
+
+  const deleteJobMutation = useMutation({
+    mutationFn: (jobId: string) => jobService.adminDeleteJob(jobId),
+    onSuccess: () => {
+      toast.success('Session deleted successfully')
+      // Invalidate ALL queries to ensure no stale job/candidate data remains
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey
+          if (!Array.isArray(key)) return true
+          // Invalidate job, candidate, and stats related queries
+          const invalidateKeys = ['job', 'jobs', 'candidates', 'candidate', 'recruiter-stats', 'client-analytics']
+          return invalidateKeys.some(k => key[0] === k)
+        },
+      })
+      // Reset queries cache completely to remove any deleted job data
+      queryClient.refetchQueries({ queryKey: ['jobs'] })
+      // Navigate to dashboard immediately
+      navigate(`${baseRole}/dashboard`)
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to delete session')
+    },
+  })
+
+  const handleDeleteJob = () => {
+    if (window.confirm('Are you sure you want to delete this session? All candidates and associated data will be permanently deleted. This action cannot be undone.')) {
+      deleteJobMutation.mutate(jobId!)
+    }
+  }
+
+  const handleCancelJob = () => {
+    if (window.confirm('Are you sure you want to cancel this job? All candidates from this session will be permanently deleted. This action cannot be undone.')) {
+      cancelJobMutation.mutate(jobId!)
+    }
+  }
 
   const addRow = () => setRows((r) => [...r, newRow()])
   const updateRow = (id: string, field: 'resume' | 'linkedin', file: File | null) =>
@@ -89,7 +178,7 @@ export default function JobResultsPage() {
   const handleAddCandidates = async () => {
     if (!jobId) return
     const incomplete = rows.filter((r) => !r.resume || !r.linkedin)
-    if (incomplete.length > 0) return toast.error('Every candidate needs both resume and LinkedIn PDFs')
+    if (incomplete.length > 0) return toast.error('Every candidate needs both resume and LinkedIn documents')
 
     const form = new FormData()
     rows.forEach((r) => {
@@ -129,15 +218,35 @@ export default function JobResultsPage() {
           <p className="text-sm text-slate-500 mt-0.5">
             {job?.total_candidates} candidates · created {job && new Date(job.created_at).toLocaleString()}
           </p>
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-2">
             <button
               onClick={() => setIsAdding(true)}
               className="btn-secondary inline-flex items-center gap-2 text-xs"
-              disabled={!job || job.status === 'failed'}
+              disabled={!job || job.status === 'failed' || job.status === 'cancelled'}
             >
               <Plus className="w-3.5 h-3.5" />
-              Add Job
+              Add Candidates
             </button>
+            {(job?.status === 'processing' || job?.status === 'pending') && (
+              <button
+                onClick={handleCancelJob}
+                disabled={cancelJobMutation.isPending}
+                className="btn-secondary inline-flex items-center gap-2 text-xs bg-red-50 border-red-200 text-red-600 hover:bg-red-100 hover:border-red-300 disabled:opacity-50"
+              >
+                <X className="w-3.5 h-3.5" />
+                Cancel Job
+              </button>
+            )}
+            {(job?.status === 'completed' || job?.status === 'failed' || job?.status === 'cancelled') && (
+              <button
+                onClick={handleDeleteJob}
+                disabled={deleteJobMutation.isPending}
+                className="btn-secondary inline-flex items-center gap-2 text-xs bg-red-50 border-red-200 text-red-600 hover:bg-red-100 hover:border-red-300 disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete Session
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -150,7 +259,7 @@ export default function JobResultsPage() {
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Add Job Candidates</h2>
                 <p className="text-sm text-slate-500 mt-1">
-                  Upload resumes and LinkedIn PDFs. JD is reused from this session.
+                  Upload resumes and LinkedIn documents. JD is reused from this session.
                 </p>
               </div>
               <button onClick={() => setIsAdding(false)} className="text-slate-400 hover:text-slate-700">
@@ -165,7 +274,7 @@ export default function JobResultsPage() {
                     <label className="text-xs text-slate-600">Resume {idx + 1}</label>
                     <input
                       type="file"
-                      accept="application/pdf"
+                      accept=".pdf,.docx"
                       onChange={(e) => updateRow(row.id, 'resume', e.target.files?.[0] ?? null)}
                       className="block w-full text-sm text-slate-500"
                     />
@@ -176,7 +285,7 @@ export default function JobResultsPage() {
                     <label className="text-xs text-slate-600">LinkedIn {idx + 1}</label>
                     <input
                       type="file"
-                      accept="application/pdf"
+                      accept=".pdf,.docx"
                       onChange={(e) => updateRow(row.id, 'linkedin', e.target.files?.[0] ?? null)}
                       className="block w-full text-sm text-slate-500"
                     />
@@ -230,7 +339,16 @@ export default function JobResultsPage() {
               style={{ width: `${progress}%` }}
             />
           </div>
-          <p className="text-xs text-slate-400">Results appear as each candidate is processed.</p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">Results appear as each candidate is processed.</p>
+            <button
+              onClick={handleCancelJob}
+              disabled={cancelJobMutation.isPending}
+              className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+            >
+              Stop Processing
+            </button>
+          </div>
         </div>
       )}
 
@@ -302,7 +420,7 @@ export default function JobResultsPage() {
 
               {/* Status dropdown */}
               <select
-                value={c.review_status || 'in_process'}
+                value={c.review_status === 'in_process' ? '' : c.review_status ?? ''}
                 onChange={(e) => {
                   e.stopPropagation()
                   reviewStatusMutation.mutate({
@@ -319,6 +437,15 @@ export default function JobResultsPage() {
                   </option>
                 ))}
               </select>
+
+              <button
+                onClick={(e) => handleDeleteCandidate(c.id, e)}
+                disabled={deleteCandidateMutation.isPending}
+                className="p-2 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                title="Delete candidate"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
 
               <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
             </div>

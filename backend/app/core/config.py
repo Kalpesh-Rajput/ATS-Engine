@@ -1,7 +1,6 @@
 from functools import lru_cache
-from typing import List
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict # type: ignore
 
 
 class Settings(BaseSettings):
@@ -28,7 +27,7 @@ class Settings(BaseSettings):
     FAISS_METADATA_PATH: str = "vector_indices/candidates_metadata.pkl"
 
     # LLM
-    GROQ_API_KEY: str
+    GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "llama-3.1-8b-instant"
     GROQ_MAX_TOKENS: int = 2048
 
@@ -51,7 +50,7 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 10
 
     # CORS
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     @property
     def max_file_bytes(self) -> int:

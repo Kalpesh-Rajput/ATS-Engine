@@ -60,6 +60,10 @@ export const jobService = {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       .then((r) => r.data),
+
+  cancelJob: (jobId: string) =>
+    api.post(`/jobs/${jobId}/cancel`).then((r) => r.data),
+
   getClientAnalytics: () => api.get('/jobs/analytics/client-performance').then((r) => r.data),
 
   // Admin: get analytics for specific recruiter
@@ -76,6 +80,7 @@ export const candidateService = {
     status?: string
     review_status?: string
     min_score?: number
+    recruiter_id?: string
     page?: number
     page_size?: number
   }) => api.get('/candidates/', { params }).then((r) => r.data),
@@ -83,6 +88,7 @@ export const candidateService = {
   listAllCandidates: (params?: {
     status?: string
     review_status?: string
+    recruiter_id?: string
     page?: number
     page_size?: number
   }) => api.get('/candidates/', { params }).then((r) => r.data),

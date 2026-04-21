@@ -13,7 +13,6 @@ import AnalysisPage from './pages/AnalysisPage'
 // Admin Pages
 import AdminDashboardPage from './pages/admin/AdminDashboardPage'
 import AddRecruiterPage from './pages/admin/AddRecruiterPage'
-
 import Layout from './components/common/Layout'
 
 interface ProtectedRouteProps {
@@ -75,6 +74,7 @@ export default function App() {
         >
           <Route index element={<Navigate to="/admin/dashboard" replace />} />
           <Route path="dashboard" element={<AdminDashboardPage />} />
+          <Route path="analysis" element={<AnalysisPage />} />
           <Route path="add-recruiter" element={<AddRecruiterPage />} />
           <Route path="view-recruiter/:recruiterId" element={<DashboardPage isAdminView={true} />} />
           <Route path="view-recruiter/:recruiterId/analysis" element={<AnalysisPage />} />

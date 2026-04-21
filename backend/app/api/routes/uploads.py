@@ -20,7 +20,7 @@ from app.services.tasks import preprocess_jd, run_scoring_pipeline
 
 router = APIRouter()
 
-ALLOWED_MIME = {"application/pdf"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 
 
 def _save_file(content: bytes, dest: Path) -> str:
@@ -31,9 +31,9 @@ def _save_file(content: bytes, dest: Path) -> str:
 
 @router.post("/", response_model=ScoringJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_and_trigger(
-    job_description: UploadFile = File(..., description="Job Description PDF"),
-    resumes: List[UploadFile] = File(..., description="Candidate resume PDFs"),
-    linkedin_profiles: List[UploadFile] = File(..., description="LinkedIn profile PDFs (same order as resumes)"),
+    job_description: UploadFile | None = File(None, description="Job Description document"),
+    resumes: List[UploadFile] = File(..., description="Candidate resume documents"),
+    linkedin_profiles: List[UploadFile] = File(..., description="LinkedIn profile documents (same order as resumes)"),
     job_title: str = Form(...),
     client_name: str | None = Form(None),
     session_name: str | None = Form(None),
@@ -47,6 +47,11 @@ async def upload_and_trigger(
     if has_prompt_injection(job_title):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Potential malicious input in job title")
 
+    if not job_description and not (job_description_text or "").strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Please upload a JD document or paste the JD text")
+    if job_description_text and has_prompt_injection(job_description_text):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Potential malicious input in job description text")
+
     # Validate counts
     if len(resumes) != len(linkedin_profiles):
         raise HTTPException(
@@ -57,27 +62,26 @@ async def upload_and_trigger(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="At least one resume required")
 
     # Validate mime types
-    all_files = [job_description] + resumes + linkedin_profiles
+    all_files = resumes + linkedin_profiles
+    if job_description:
+        all_files.insert(0, job_description)
     for f in all_files:
-        if f.content_type not in ALLOWED_MIME:
+        filename = f.filename or ""
+        ext = Path(filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"{f.filename} is not a PDF",
+                detail=f"{filename} must be a PDF or Word document (.pdf, .docx)",
             )
-        if not (f.filename or "").lower().endswith(".pdf"):
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"{f.filename} must have .pdf extension",
-            )
-        if has_prompt_injection(f.filename or ""):
+        if has_prompt_injection(filename):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"{f.filename} has suspicious input pattern",
+                detail=f"{filename} has suspicious input pattern",
             )
         if f.size and f.size > settings.max_file_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"{f.filename} exceeds {settings.MAX_FILE_SIZE_MB} MB limit",
+                detail=f"{filename} exceeds {settings.MAX_FILE_SIZE_MB} MB limit",
             )
 
     base_dir = Path(settings.UPLOAD_DIR) / str(current.id)
@@ -85,10 +89,16 @@ async def upload_and_trigger(
     job_dir = base_dir / str(job_id)
 
     # Save JD
-    jd_bytes = await job_description.read()
-    if not jd_bytes:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="JD PDF is empty")
-    jd_path = _save_file(jd_bytes, job_dir / "jd" / job_description.filename)
+    if job_description:
+        jd_bytes = await job_description.read()
+        if not jd_bytes:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="JD file is empty")
+        jd_path = _save_file(jd_bytes, job_dir / "jd" / job_description.filename)
+    else:
+        jd_text_value = (job_description_text or "").strip()
+        if not jd_text_value:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Job description text is empty")
+        jd_path = _save_file(jd_text_value.encode('utf-8'), job_dir / "jd" / "jd.txt")
 
     # Create scoring job record
     scoring_job = ScoringJob(
@@ -106,6 +116,7 @@ async def upload_and_trigger(
     )
     db.add(scoring_job)
     await db.flush()
+    await db.commit()
 
     # Save files and create candidate records
     candidate_payloads = []
@@ -167,6 +178,7 @@ async def upload_and_trigger(
     ).apply_async()
     scoring_job.celery_task_id = task.id
     await db.flush()
+    await db.commit()
 
     logger.info("scoring_job_created", job_id=str(job_id), candidate_count=len(resumes))
     return scoring_job

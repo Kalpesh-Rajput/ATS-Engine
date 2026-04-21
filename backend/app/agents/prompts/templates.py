@@ -24,6 +24,13 @@ STRICT SKILL EXTRACTION RULES:
 - Deduplicate near-duplicates and normalize casing (e.g., "aws" -> "AWS", "python" -> "Python").
 - If certifications are mentioned, include cert names in skills (e.g., "AWS Solutions Architect Associate", "CCNA").
 
+EDUCATION EXTRACTION RULES:
+- Look for sections like "Education", "Academic Background", "Qualifications", "Degrees"
+- Extract degree name, institution/university, and graduation year
+- Include both undergraduate and graduate degrees
+- Include certifications and diplomas if listed under education
+- If no education section exists, return an empty array []
+
 Return JSON with this exact schema:
 {{
   "name": "string or null",
@@ -200,4 +207,96 @@ Return JSON:
   "notes": ["optional note"],
   "required_fixes": []
 }}
+"""
+
+# ─── Fit Analysis Agent (LLM-powered) ────────────────────────────
+
+FIT_ANALYSIS_SYSTEM = """You are an expert talent assessment analyst. Evaluate candidate fit using structured reasoning.
+
+CRITICAL RULES:
+1. Scores MUST be integers between 0-100
+2. Reasoning MUST justify each score with specific evidence
+3. Use ONLY the data provided - do not hallucinate missing information
+4. Be objective and consistent
+5. Return ONLY valid JSON - no markdown, no preamble"""
+
+FIT_ANALYSIS_PROMPT = """Evaluate this candidate's fit for the role using structured reasoning.
+
+## INPUT DATA
+
+### KPI Metrics (from deterministic analysis)
+- Technology Stack Score: {key_metrics[tech_stack_score]}%
+- Core Strengths Score: {key_metrics[core_strengths_score]}%
+- Education Score: {key_metrics[education_score]}%
+- Experience Score: {key_metrics[experience_score]}%
+- Soft Skills Detected: {key_metrics[soft_skills_detected]}
+
+### Skills Analysis
+Skills Matched: {skills_matched}
+Skills Missing: {skills_missing}
+
+### Experience Summary
+{experience_summary}
+
+### Education Summary
+{education_summary}
+
+### Resume Text (truncated)
+{resume_text}
+
+### LinkedIn Profile (truncated)
+{linkedin_text}
+
+## EVALUATION CRITERIA
+
+### 1. Technical Suitability (0-100)
+Assess:
+- Depth of relevant technical skills
+- Quality and relevance of past technical work
+- Technology stack alignment with role requirements
+- Hands-on experience vs theoretical knowledge
+
+### 2. Workplace Alignment (0-100)
+Assess:
+- Soft skills demonstrated (communication, collaboration, leadership)
+- Work style indicators (ownership, adaptability)
+- Team/culture fit signals
+- Professional maturity indicators
+
+### 3. Advancement Readiness (0-100)
+Assess:
+- Learning trajectory and growth mindset
+- Complexity progression in roles
+- Educational foundation for growth
+- Potential for expanded responsibility
+
+## CROSS-CHECK WITH KPI
+Use these KPI scores as reference points:
+- If tech_stack < 30, technical_suitability should generally be < 70
+- If experience_score < 40, advancement_readiness should generally be < 70
+- If core_strengths < 30, workplace_alignment should generally be < 60
+
+## OUTPUT FORMAT
+
+Return STRICT JSON with these fields:
+{{
+  "technical_suitability": 0-100,
+  "workplace_alignment": 0-100,
+  "advancement_readiness": 0-100,
+  "reasoning": {{
+    "technical": "2-3 sentences explaining technical score with specific evidence",
+    "workplace": "2-3 sentences explaining workplace alignment with specific evidence",
+    "advancement": "2-3 sentences explaining advancement readiness with specific evidence"
+  }},
+  "strengths": ["key strength 1", "key strength 2"],
+  "gaps": ["key gap 1", "key gap 2"]
+}}
+
+REASONING REQUIREMENTS:
+- Each reasoning field MUST be non-empty and specific
+- Reference concrete details from resume/experience
+- Explain WHY the score was assigned
+- If score is high (80+), explain what makes candidate exceptional
+- If score is low (<50), explain specific concerns
+- If score is moderate (50-79), explain balanced view
 """

@@ -27,3 +27,4 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+backend/vector_indices/

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, LogOut, Plus } from 'lucide-react'
+import { LayoutDashboard, LogOut, Plus, TrendingUp } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useQuery } from '@tanstack/react-query'
 import { jobService } from '../../services/apiServices'
@@ -26,6 +26,7 @@ export default function Layout() {
 
   const adminNavItems = [
     { to: `${baseRole}/dashboard`, icon: LayoutDashboard, label: 'Dashboard' },
+    { to: `${baseRole}/analysis`, icon: TrendingUp, label: 'Analytics' },
     { to: `${baseRole}/add-recruiter`, icon: Plus, label: 'Add Recruiter' },
   ]
 

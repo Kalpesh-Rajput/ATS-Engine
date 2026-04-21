@@ -34,6 +34,7 @@ async def update_me(
         setattr(current, field, value)
 
     await db.flush()
+    await db.commit()
     return current
 
 
@@ -88,6 +89,7 @@ async def update_recruiter(
         setattr(recruiter, field, value)
 
     await db.flush()
+    await db.commit()
     await db.refresh(recruiter)
     return recruiter
 

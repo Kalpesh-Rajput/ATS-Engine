@@ -2,14 +2,17 @@
 LangGraph multi-agent pipeline for ATS scoring.
 
 Graph topology:
-  parser_agent
-       |
-  ┌────┴─────┐   (parallel)
-scorer_agent  linkedin_agent
-  └────┬─────┘
-  reporter_agent
-       |
-      END
+                    ┌→ scorer_agent ───┐
+                    │                    │
+  parser_agent ────┼→ linkedin_agent ─┼→ evaluator_agent → reporter_agent → END
+                    │                    │
+                    └→ kpi_agent ───────┘
+                         ↓
+                    kpi_validator
+                         ↓
+                    fit_agent
+                         ↓
+                    fit_validator
 """
 from langgraph.graph import StateGraph, END
 
@@ -17,6 +20,10 @@ from app.agents.state import ATSState
 from app.agents.parser_agent import parser_agent
 from app.agents.scorer_agent import scorer_agent
 from app.agents.linkedin_agent import linkedin_agent
+from app.agents.kpi_agent import kpi_agent
+from app.agents.kpi_validator import kpi_validator
+from app.agents.fit_agent import fit_agent
+from app.agents.fit_validator import fit_validator
 from app.agents.evaluator_agent import evaluator_agent
 from app.agents.reporter_agent import reporter_agent
 
@@ -28,22 +35,35 @@ def build_pipeline() -> StateGraph:
     workflow.add_node("parser", parser_agent)
     workflow.add_node("scorer", scorer_agent)
     workflow.add_node("linkedin", linkedin_agent)
+    workflow.add_node("kpi_agent", kpi_agent)
+    workflow.add_node("kpi_validator", kpi_validator)
+    workflow.add_node("fit_agent", fit_agent)
+    workflow.add_node("fit_validator", fit_validator)
     workflow.add_node("evaluator", evaluator_agent)
     workflow.add_node("reporter", reporter_agent)
 
     # Entry point
     workflow.set_entry_point("parser")
 
-    # Fan-out to scorer + linkedin in parallel, then fan-in to reporter.
-    #
-    # Important: In the current LangGraph version, `add_conditional_edges`
-    # does not support returning a list of node names. So we do parallelism
-    # using normal edges, and let `scorer_agent` / `linkedin_agent` skip
-    # work internally when input text is missing.
+    # Parallel fan-out from parser:
+    # - scorer_agent (existing ATS scoring)
+    # - linkedin_agent (existing LinkedIn check)
+    # - kpi_agent (new KPI evaluation pipeline)
     workflow.add_edge("parser", "scorer")
     workflow.add_edge("parser", "linkedin")
+    workflow.add_edge("parser", "kpi_agent")
+
+    # KPI pipeline chain (sequential, independent of scorer/linkedin)
+    workflow.add_edge("kpi_agent", "kpi_validator")
+    workflow.add_edge("kpi_validator", "fit_agent")
+    workflow.add_edge("fit_agent", "fit_validator")
+
+    # All parallel paths converge at evaluator
     workflow.add_edge("scorer", "evaluator")
     workflow.add_edge("linkedin", "evaluator")
+    workflow.add_edge("fit_validator", "evaluator")
+
+    # Evaluator → Reporter → END
     workflow.add_edge("evaluator", "reporter")
     workflow.add_edge("reporter", END)
 
@@ -106,6 +126,17 @@ def run_pipeline_sync(
         "linkedin_embedding": None,
         "errors": [],
         "output_blocked": False,
+        # KPI Evaluation fields
+        "evaluation_breakdown": None,
+        "kpi_validation": None,
+        # Fit Analysis fields
+        "compatibility_assessment": None,
+        "fit_reasoning": None,
+        "key_signals": [],
+        "strengths": [],
+        "gaps": [],
+        "fit_validation": None,
+        "fit_analysis_debug": None,
         "extracted_data": {},
     }
 

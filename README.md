@@ -473,3 +473,29 @@ Then open http://localhost:5173
 | Email | admin@ats.com |
 | Password | Admin@123 |
 
+
+
+
+--- If comflict happen in vector.index
+
+Options
+Keep and save your local changes:
+
+git stash push -m "save local vector index changes"
+git pull origin main
+later: git stash pop
+Discard local changes and pull:
+
+git checkout -- candidates.faiss backend/vector_indices/candidates_metadata.pkl
+git pull origin main
+Commit local changes if you want them in history:
+
+git add candidates.faiss backend/vector_indices/candidates_metadata.pkl
+git commit -m "Save local vector indices"
+git pull origin main
+
+
+alembic error solution
+check current version : alembic current 
+chnage code with down_revision : alembic stamp d323aee86632
+final : alembic upgrade head

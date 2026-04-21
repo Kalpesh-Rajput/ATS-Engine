@@ -1,6 +1,8 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 import {
   ArrowLeft,
   CheckCircle,
@@ -19,6 +21,7 @@ import {
   Target,
   Shield,
   Zap,
+  Users,
 } from 'lucide-react'
 import { candidateService } from '../services/apiServices'
 import { Card } from '../components/common/Card'
@@ -151,6 +154,111 @@ export default function CandidateDetailPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
 
+  const exportToPDF = async () => {
+  const element = document.getElementById('candidate-profile')
+  if (!element) {
+    toast.error('Unable to export profile')
+    return
+  }
+
+  try {
+    toast.loading('Generating PDF...', { id: 'pdf-export' })
+
+    const pdf = new jsPDF('p', 'mm', 'a4')
+    const pageWidth = pdf.internal.pageSize.getWidth()
+    const pageHeight = pdf.internal.pageSize.getHeight()
+    const margin = 12
+    const contentWidth = pageWidth - margin * 2
+    const contentHeightPx = pageHeight - margin * 2
+
+    // Scale factor: how many PDF mm per screen pixel
+    const scale = 2
+    const pxToMm = contentWidth / (element.scrollWidth * scale)
+
+    // Render the entire profile at once at 2x scale
+    const fullCanvas = await html2canvas(element, {
+      scale,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      windowWidth: element.scrollWidth,
+      windowHeight: element.scrollHeight,
+    })
+
+    const totalHeightMM = (fullCanvas.height * contentWidth) / fullCanvas.width
+    const pageHeightPx = Math.floor((pageHeight - margin * 2) * fullCanvas.width / contentWidth)
+
+    // Find all Card boundaries relative to the profile container
+    const containerTop = element.getBoundingClientRect().top + window.scrollY
+    const cards = Array.from(element.querySelectorAll<HTMLElement>('[class*="rounded"]'))
+      .filter(el => {
+        // Only pick top-level meaningful blocks (cards with enough height)
+        const rect = el.getBoundingClientRect()
+        return rect.height > 60
+      })
+
+    // Get the y positions (in canvas pixels) where we MUST NOT cut
+    // i.e., between top and bottom of each card
+    const forbiddenRanges: Array<{ top: number; bottom: number }> = []
+
+    cards.forEach(card => {
+      const rect = card.getBoundingClientRect()
+      const topPx = (rect.top + window.scrollY - containerTop) * scale
+      const bottomPx = (rect.bottom + window.scrollY - containerTop) * scale
+      forbiddenRanges.push({ top: topPx, bottom: bottomPx })
+    })
+
+    // Find safe cut points — prefer cutting BETWEEN cards
+    const findSafeCutPoint = (idealCutPx: number): number => {
+      // Check if ideal cut falls inside a card
+      const conflicting = forbiddenRanges.find(
+        r => idealCutPx > r.top + 20 && idealCutPx < r.bottom - 20
+      )
+      if (!conflicting) return idealCutPx
+      // Cut just before this card starts
+      return conflicting.top - 10
+    }
+
+    // Slice canvas into pages at safe cut points
+    let renderedPx = 0
+    let pageNum = 0
+
+    while (renderedPx < fullCanvas.height) {
+      if (pageNum > 0) pdf.addPage()
+
+      const idealEnd = renderedPx + pageHeightPx
+      const safeCut = idealEnd >= fullCanvas.height
+        ? fullCanvas.height
+        : findSafeCutPoint(idealEnd)
+
+      const sliceHeight = Math.max(safeCut - renderedPx, 1)
+
+      const pageCanvas = document.createElement('canvas')
+      pageCanvas.width = fullCanvas.width
+      pageCanvas.height = sliceHeight
+
+      const ctx = pageCanvas.getContext('2d')!
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, pageCanvas.width, sliceHeight)
+      ctx.drawImage(fullCanvas, 0, renderedPx, fullCanvas.width, sliceHeight, 0, 0, fullCanvas.width, sliceHeight)
+
+      const sliceHeightMM = (sliceHeight * contentWidth) / fullCanvas.width
+      pdf.addImage(pageCanvas.toDataURL('image/png'), 'PNG', margin, margin, contentWidth, sliceHeightMM)
+
+      renderedPx += sliceHeight
+      pageNum++
+    }
+
+    const fileName = `${candidate?.name?.replace(/[^a-zA-Z0-9]/g, '_') || 'Candidate'}_Profile_${new Date().toISOString().split('T')[0]}.pdf`
+    pdf.save(fileName)
+    toast.success('Profile exported successfully!', { id: 'pdf-export' })
+  } catch (error) {
+    console.error('PDF export error:', error)
+    toast.error('Failed to export profile', { id: 'pdf-export' })
+  }
+  }
+
   const { data: candidate, isLoading } = useQuery({
     queryKey: ['candidate', candidateId],
     queryFn: () => candidateService.getCandidate(candidateId!),
@@ -209,6 +317,8 @@ export default function CandidateDetailPage() {
   const isShortlisted = candidate.review_status === 'shortlisted'
   const matchScore = candidate.linkedin_match_score || 0
   const atsScore = candidate.ats_score || 0
+  const selectedStatus = candidate.review_status === 'in_process' ? '' : candidate.review_status ?? ''
+  const clientName = candidate.client_name || 'Unknown Client'
   
   // Check for duplicate status
   const duplicateStatus = candidate.extracted_data?.duplicate_status
@@ -235,20 +345,23 @@ export default function CandidateDetailPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm">
+            <Button variant="ghost" size="sm" onClick={exportToPDF}>
               <Download className="w-4 h-4 mr-2" />
-              Resume
+              Export Profile
             </Button>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</label>
               <select
-                value={candidate.review_status || 'in_process'}
+                value={selectedStatus}
                 onChange={(e) =>
                   reviewStatusMutation.mutate({ review_status: e.target.value })
                 }
                 disabled={reviewStatusMutation.isPending}
                 className="px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-all disabled:opacity-50"
               >
+                <option value="" disabled>
+                  Choose Status
+                </option>
                 {statusOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
@@ -261,7 +374,29 @@ export default function CandidateDetailPage() {
       </div>
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto p-8 space-y-8">
+      <div id="candidate-profile" className="max-w-7xl mx-auto p-8 space-y-8 bg-white">
+        {/* PDF Header - Candidate Info */}
+        <div className="mb-8 pb-6 border-b-2 border-gray-200">
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">
+            {candidate.name || 'Unknown Candidate'}
+          </h1>
+          <div className="flex flex-wrap items-center gap-6">
+            <p className="text-lg text-primary-600 font-semibold">
+              Position: {candidate.job_applied || 'Not specified'}
+            </p>
+            <p className="text-base text-gray-600">
+              Applied: {new Date(candidate.created_at).toLocaleDateString('en-US', {
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric',
+              })}
+            </p>
+            <p className="text-base text-gray-600">
+              Client: {clientName}
+            </p>
+          </div>
+        </div>
+
         {/* Top Section - Score & Quick Info */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Score Card */}
@@ -391,6 +526,96 @@ export default function CandidateDetailPage() {
           </div>
         </div>
 
+        {/* KPI Metrics - Evaluation Breakdown */}
+        {candidate.evaluation_breakdown && (
+          <SectionCard
+            title="Evaluation Breakdown"
+            icon={Target}
+            color="from-blue-500 to-cyan-600"
+          >
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4 border border-blue-200">
+                <p className="text-xs text-blue-600 font-semibold mb-1">Technology Stack</p>
+                <p className="text-3xl font-bold text-blue-900">
+                  {candidate.evaluation_breakdown.technology_stack?.score || 0}%
+                </p>
+              </div>
+              <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-4 border border-purple-200">
+                <p className="text-xs text-purple-600 font-semibold mb-1">Core Strengths</p>
+                <p className="text-3xl font-bold text-purple-900">
+                  {candidate.evaluation_breakdown.core_strengths?.score || 0}%
+                </p>
+              </div>
+              <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-xl p-4 border border-emerald-200">
+                <p className="text-xs text-emerald-600 font-semibold mb-1">Education</p>
+                <p className="text-3xl font-bold text-emerald-900">
+                  {candidate.evaluation_breakdown.education?.score || 0}%
+                </p>
+              </div>
+              <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-xl p-4 border border-amber-200">
+                <p className="text-xs text-amber-600 font-semibold mb-1">Experience</p>
+                <p className="text-3xl font-bold text-amber-900">
+                  {candidate.evaluation_breakdown.experience?.score || 0}%
+                </p>
+              </div>
+            </div>
+          </SectionCard>
+        )}
+
+        {/* Fit Analysis - Compatibility Assessment */}
+        {candidate.compatibility_assessment && (
+          <SectionCard
+            title="Compatibility Assessment"
+            icon={Users}
+            color="from-violet-500 to-purple-600"
+          >
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 rounded-xl border-2 border-violet-200 bg-violet-50 hover:border-violet-300 transition-colors">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm font-medium text-gray-700">Technical Suitability</span>
+                  <span className="text-lg font-bold text-violet-600">
+                    {Math.round(candidate.compatibility_assessment.technical_suitability || 0)}%
+                  </span>
+                </div>
+                <div className="h-3 bg-violet-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-400 transition-all duration-500"
+                    style={{ width: `${Math.round(candidate.compatibility_assessment.technical_suitability || 0)}%` }}
+                  />
+                </div>
+              </div>
+              <div className="p-4 rounded-xl border-2 border-indigo-200 bg-indigo-50 hover:border-indigo-300 transition-colors">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm font-medium text-gray-700">Workplace Alignment</span>
+                  <span className="text-lg font-bold text-indigo-600">
+                    {Math.round(candidate.compatibility_assessment.workplace_alignment || 0)}%
+                  </span>
+                </div>
+                <div className="h-3 bg-indigo-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-indigo-400 transition-all duration-500"
+                    style={{ width: `${Math.round(candidate.compatibility_assessment.workplace_alignment || 0)}%` }}
+                  />
+                </div>
+              </div>
+              <div className="p-4 rounded-xl border-2 border-purple-200 bg-purple-50 hover:border-purple-300 transition-colors">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm font-medium text-gray-700">Advancement Readiness</span>
+                  <span className="text-lg font-bold text-purple-600">
+                    {Math.round(candidate.compatibility_assessment.advancement_readiness || 0)}%
+                  </span>
+                </div>
+                <div className="h-3 bg-purple-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-purple-500 to-purple-400 transition-all duration-500"
+                    style={{ width: `${Math.round(candidate.compatibility_assessment.advancement_readiness || 0)}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+        )}
+
         {/* Two Column Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* ATS Summary */}
@@ -399,33 +624,9 @@ export default function CandidateDetailPage() {
             icon={Sparkles}
             color="from-violet-500 to-purple-600"
           >
-            <p className="text-gray-600 leading-relaxed mb-6">
+            <p className="text-gray-600 leading-relaxed">
               {candidate.main_summary || 'No summary generated.'}
             </p>
-            
-            {/* Score Breakdown */}
-            <div className="space-y-3">
-              <h4 className="font-semibold text-gray-900 mb-3">Score Breakdown</h4>
-              {[
-                { label: 'Experience Match', score: Math.min(atsScore + 10, 100) },
-                { label: 'Skills Alignment', score: Math.min(atsScore + 5, 100) },
-                { label: 'Education Fit', score: Math.min(atsScore - 5, 95) },
-                { label: 'Overall Fit', score: atsScore },
-              ].map((item) => (
-                <div key={item.label} className="flex items-center gap-3">
-                  <span className="text-sm text-gray-600 w-32">{item.label}</span>
-                  <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-400"
-                      style={{ width: `${item.score}%` }}
-                    />
-                  </div>
-                  <span className="text-sm font-semibold text-gray-900 w-10 text-right">
-                    {item.score}%
-                  </span>
-                </div>
-              ))}
-            </div>
           </SectionCard>
 
           {/* Skills */}
@@ -536,13 +737,16 @@ export default function CandidateDetailPage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Current Status</label>
               <select
-                value={candidate.review_status || 'in_process'}
+                value={selectedStatus}
                 onChange={(e) =>
                   reviewStatusMutation.mutate({ review_status: e.target.value })
                 }
                 disabled={reviewStatusMutation.isPending}
                 className="px-4 py-2.5 rounded-xl border-2 border-primary-300 bg-white text-sm font-semibold text-primary-900 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all disabled:opacity-50"
               >
+                <option value="" disabled>
+                  Choose Status
+                </option>
                 {statusOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}

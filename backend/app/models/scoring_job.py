@@ -40,4 +40,6 @@ class ScoringJob(Base):
 
     # Relationships
     recruiter: Mapped["Recruiter"] = relationship(back_populates="scoring_jobs")  # noqa: F821
-    candidates: Mapped[list["Candidate"]] = relationship(back_populates="scoring_job")  # noqa: F821
+    candidates: Mapped[list["Candidate"]] = relationship(  # noqa: F821
+        back_populates="scoring_job", cascade="all, delete-orphan"
+    )

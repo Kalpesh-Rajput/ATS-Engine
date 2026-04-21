@@ -13,6 +13,7 @@ import {
   Briefcase,
   Clock,
   CheckCircle2,
+  Trash2,
 } from 'lucide-react'
 import { candidateService, jobService, recruiterService } from '../services/apiServices'
 import { useAuthStore } from '../store/authStore'
@@ -40,6 +41,7 @@ export default function DashboardPage({ isAdminView = false }: DashboardPageProp
   const { recruiterId } = useParams()
   const baseRole = userRole === 'admin' ? '/admin' : '/user'
 
+  
   // Fetch recruiter data when in admin view
   const { data: viewedRecruiter } = useQuery({
     queryKey: ['recruiter', recruiterId],
@@ -93,39 +95,117 @@ export default function DashboardPage({ isAdminView = false }: DashboardPageProp
   }
 
   const { data: candidateData } = useQuery<{ candidates: any[]; total: number; page: number; page_size: number }, Error>({
-    queryKey: ['candidates', selectedKpi],
-    queryFn: () =>
-      candidateService.listCandidates({
+    queryKey: ['candidates', selectedKpi, isAdminView ? recruiterId : 'me'],
+    queryFn: () => {
+      const params: any = {
         review_status: reviewStatusMap[selectedKpi],
         page: 1,
         page_size: 100,
-      }),
+      }
+      
+      // Add recruiter_id filter when in admin view
+      if (isAdminView && recruiterId) {
+        params.recruiter_id = recruiterId
+      }
+      
+      return candidateService.listCandidates(params).then((result) => {
+        // Client-side filtering since backend ignores recruiter_id
+        if (isAdminView && recruiterId && result.candidates) {
+          const filteredCandidates = result.candidates.filter((candidate: any) => 
+            candidate.recruiter_id === recruiterId
+          )
+          
+          return {
+            ...result,
+            candidates: filteredCandidates,
+            total: filteredCandidates.length
+          }
+        }
+        
+        return result
+      })
+    },
     enabled: true,
   })
 
   const { data: totalCandidatesCount = 0 } = useQuery({
-    queryKey: ['candidate-count', 'all'],
-    queryFn: () => candidateService.listCandidates({ page: 1, page_size: 1 }).then((r) => r.total),
+    queryKey: ['candidate-count', 'all', isAdminView ? recruiterId : 'me'],
+    queryFn: () => {
+      return candidateService.listCandidates({ page: 1, page_size: 1000 }).then((r) => {
+        // Client-side filtering since backend ignores recruiter_id
+        if (isAdminView && recruiterId && r.candidates) {
+          const filteredCandidates = r.candidates.filter((candidate: any) => 
+            candidate.recruiter_id === recruiterId
+          )
+          return filteredCandidates.length
+        }
+        return r.total
+      })
+    },
   })
 
   const { data: shortlistedCandidatesCount = 0 } = useQuery({
-    queryKey: ['candidate-count', 'shortlisted'],
-    queryFn: () => candidateService.listCandidates({ review_status: 'shortlisted', page: 1, page_size: 1 }).then((r) => r.total),
+    queryKey: ['candidate-count', 'shortlisted', isAdminView ? recruiterId : 'me'],
+    queryFn: () => {
+      return candidateService.listCandidates({ review_status: 'shortlisted', page: 1, page_size: 1000 }).then((r) => {
+        // Client-side filtering since backend ignores recruiter_id
+        if (isAdminView && recruiterId && r.candidates) {
+          const filteredCandidates = r.candidates.filter((candidate: any) => 
+            candidate.recruiter_id === recruiterId
+          )
+          return filteredCandidates.length
+        }
+        return r.total
+      })
+    },
   })
 
   const { data: notShortlistedCandidatesCount = 0 } = useQuery({
-    queryKey: ['candidate-count', 'not_shortlisted'],
-    queryFn: () => candidateService.listCandidates({ review_status: 'not_shortlisted', page: 1, page_size: 1 }).then((r) => r.total),
+    queryKey: ['candidate-count', 'not_shortlisted', isAdminView ? recruiterId : 'me'],
+    queryFn: () => {
+      return candidateService.listCandidates({ review_status: 'not_shortlisted', page: 1, page_size: 1000 }).then((r) => {
+        // Client-side filtering since backend ignores recruiter_id
+        if (isAdminView && recruiterId && r.candidates) {
+          const filteredCandidates = r.candidates.filter((candidate: any) => 
+            candidate.recruiter_id === recruiterId
+          )
+          return filteredCandidates.length
+        }
+        return r.total
+      })
+    },
   })
 
   const { data: inProcessCandidatesCount = 0 } = useQuery({
-    queryKey: ['candidate-count', 'in_process'],
-    queryFn: () => candidateService.listCandidates({ review_status: 'in_process', page: 1, page_size: 1 }).then((r) => r.total),
+    queryKey: ['candidate-count', 'in_process', isAdminView ? recruiterId : 'me'],
+    queryFn: () => {
+      return candidateService.listCandidates({ review_status: 'in_process', page: 1, page_size: 1000 }).then((r) => {
+        // Client-side filtering since backend ignores recruiter_id
+        if (isAdminView && recruiterId && r.candidates) {
+          const filteredCandidates = r.candidates.filter((candidate: any) => 
+            candidate.recruiter_id === recruiterId
+          )
+          return filteredCandidates.length
+        }
+        return r.total
+      })
+    },
   })
 
   const { data: selectedCandidatesCount = 0 } = useQuery({
-    queryKey: ['candidate-count', 'selected'],
-    queryFn: () => candidateService.listCandidates({ review_status: 'selected', page: 1, page_size: 1 }).then((r) => r.total),
+    queryKey: ['candidate-count', 'selected', isAdminView ? recruiterId : 'me'],
+    queryFn: () => {
+      return candidateService.listCandidates({ review_status: 'selected', page: 1, page_size: 1000 }).then((r) => {
+        // Client-side filtering since backend ignores recruiter_id
+        if (isAdminView && recruiterId && r.candidates) {
+          const filteredCandidates = r.candidates.filter((candidate: any) => 
+            candidate.recruiter_id === recruiterId
+          )
+          return filteredCandidates.length
+        }
+        return r.total
+      })
+    },
   })
 
   const reviewStatusMutation = useMutation({
@@ -139,13 +219,39 @@ export default function DashboardPage({ isAdminView = false }: DashboardPageProp
           return ['candidates', 'candidate-count', 'recruiter-stats', 'candidate'].includes(key[0] as string)
         },
       })
-      queryClient.invalidateQueries({ queryKey: ['candidates', selectedKpi] })
+      queryClient.invalidateQueries({ queryKey: ['candidates', selectedKpi, isAdminView ? recruiterId : 'me'] })
+      queryClient.invalidateQueries({ queryKey: ['candidate-count', isAdminView ? recruiterId : 'me'] })
       queryClient.invalidateQueries({ queryKey: ['candidate'] })
     },
     onError: (error) => {
       console.error('Failed to update candidate status', error)
     },
   })
+
+  const deleteCandidateMutation = useMutation({
+    mutationFn: (candidateId: string) => candidateService.deleteCandidate(candidateId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey
+          if (!Array.isArray(key)) return false
+          return ['candidates', 'candidate-count', 'recruiter-stats', 'candidate'].includes(key[0] as string)
+        },
+      })
+      queryClient.invalidateQueries({ queryKey: ['candidates', selectedKpi, isAdminView ? recruiterId : 'me'] })
+      queryClient.invalidateQueries({ queryKey: ['candidate-count', isAdminView ? recruiterId : 'me'] })
+    },
+    onError: (error) => {
+      console.error('Failed to delete candidate', error)
+    },
+  })
+
+  const handleDeleteCandidate = (candidateId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (window.confirm('Are you sure you want to delete this candidate? This action cannot be undone.')) {
+      deleteCandidateMutation.mutate(candidateId)
+    }
+  }
 
   const clients = useMemo(() => {
     const clientSet = new Set<string>()
@@ -240,6 +346,7 @@ export default function DashboardPage({ isAdminView = false }: DashboardPageProp
   }, [totalCandidatesCount, shortlistedCandidatesCount, inProcessCandidatesCount, notShortlistedCandidatesCount, selectedCandidatesCount])
 
   const statusOptions = [
+    { value: '', label: 'Select Status', disabled: true },
     { value: 'in_process', label: 'In Process' },
     { value: 'shortlisted', label: 'Shortlisted' },
     { value: 'not_shortlisted', label: 'Not Shortlisted' },
@@ -449,25 +556,35 @@ export default function DashboardPage({ isAdminView = false }: DashboardPageProp
                           Match Score: {candidate.linkedin_match_score ?? '—'}
                         </div>
                       </div>
-                      <div className="w-full sm:w-auto">
-                        <label className="label text-xs font-semibold text-gray-500">Status</label>
-                        <select
-                          value={candidate.review_status || 'in_process'}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) =>
-                            reviewStatusMutation.mutate({
-                              candidateId: candidate.id,
-                              review_status: e.target.value,
-                            })
-                          }
-                          className="select w-full"
+                      <div className="flex items-center gap-2 w-full sm:w-auto">
+                        <div className="w-full sm:w-auto">
+                          <label className="label text-xs font-semibold text-gray-500">Status</label>
+                          <select
+                            value={candidate.review_status === 'in_process' ? '' : candidate.review_status ?? ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              reviewStatusMutation.mutate({
+                                candidateId: candidate.id,
+                                review_status: e.target.value,
+                              })
+                            }
+                            className="select w-full"
+                          >
+                            {statusOptions.map((option) => (
+                              <option key={option.value} value={option.value} disabled={option.disabled}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <button
+                          onClick={(e) => handleDeleteCandidate(candidate.id, e)}
+                          disabled={deleteCandidateMutation.isPending}
+                          className="p-2 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors self-end"
+                          title="Delete candidate"
                         >
-                          {statusOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   </div>

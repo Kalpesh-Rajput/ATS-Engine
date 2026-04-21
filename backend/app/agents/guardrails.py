@@ -69,6 +69,40 @@ def validate_input_guardrails(
     return errors
 
 
+def validate_parser_output(state: dict) -> list[str]:
+    """Validate parser agent output has minimum required fields."""
+    errors: list[str] = []
+
+    # Check resume_skills - should have at least 1 skill
+    skills = state.get("resume_skills", [])
+    if not skills or len(skills) == 0:
+        errors.append("parser_validation_failed: no_skills_extracted")
+
+    # Check resume_experience - warn if empty (some resumes may not have experience)
+    experience = state.get("resume_experience", [])
+    if not experience or len(experience) == 0:
+        errors.append("parser_validation_warning: no_experience_extracted")
+
+    # Check resume_education - warn if empty (some resumes may not have education)
+    education = state.get("resume_education", [])
+    if not education or len(education) == 0:
+        errors.append("parser_validation_warning: no_education_extracted")
+
+    # Check JD skills
+    jd_required = state.get("jd_required_skills", [])
+    jd_preferred = state.get("jd_preferred_skills", [])
+    if not jd_required and not jd_preferred:
+        errors.append("parser_validation_failed: no_jd_skills_extracted")
+
+    # Check name/email - at least one should be present for valid resume
+    name = state.get("name")
+    email = state.get("email")
+    if not name and not email:
+        errors.append("parser_validation_warning: no_name_or_email_extracted")
+
+    return errors
+
+
 def validate_process_guardrails(state: dict) -> list[str]:
     errors: list[str] = []
     if not isinstance(state.get("resume_skills", []), list):

@@ -33,6 +33,17 @@ class CandidateResponse(CandidateBase):
     client_name: Optional[str] = None
     job_role: Optional[str] = None
     created_at: datetime
+    # KPI Evaluation fields
+    evaluation_breakdown: Optional[dict] = None
+    kpi_validation: Optional[dict] = None
+    # Fit Analysis fields
+    compatibility_assessment: Optional[dict] = None
+    fit_reasoning: Optional[dict] = None
+    key_signals: Optional[List[str]] = None
+    strengths: Optional[List[str]] = None
+    gaps: Optional[List[str]] = None
+    fit_validation: Optional[dict] = None
+    fit_analysis_debug: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 

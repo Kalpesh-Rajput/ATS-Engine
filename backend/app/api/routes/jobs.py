@@ -1,15 +1,18 @@
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
 from celery import chain
+from celery.exceptions import Ignore
 from fastapi import APIRouter, Depends, HTTPException, Query, status, File, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_recruiter
 from app.db.session import get_db
 from app.core.config import settings
+from app.core.celery_app import celery_app
 from app.agents.guardrails import has_prompt_injection
 from app.models.candidate import Candidate
 from app.models.recruiter import Recruiter
@@ -19,7 +22,7 @@ from app.services.tasks import preprocess_jd, run_scoring_pipeline
 
 router = APIRouter()
 
-ALLOWED_MIME = {"application/pdf"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 
 
 def _save_file(content: bytes, dest: Path) -> str:
@@ -134,17 +137,92 @@ async def get_job(
     )
 
 
+@router.post("/{job_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: Recruiter = Depends(get_current_recruiter),
+):
+    """
+    Cancel a running scoring job by revoking the Celery task.
+    This will stop processing candidates and delete ALL candidates from this job.
+    The job itself will also be deleted.
+    """
+    job = await db.get(ScoringJob, job_id)
+    if not job or (not current.is_admin and str(job.recruiter_id) != str(current.id)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    if job.status not in ["pending", "processing"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot cancel job with status: {job.status}",
+        )
+
+    # Revoke the Celery task to stop processing
+    if job.celery_task_id:
+        celery_app.control.revoke(job.celery_task_id, terminate=True, signal="SIGTERM")
+
+    # Delete ALL candidates associated with this job
+    from app.models.candidate import Candidate
+    await db.execute(
+        text("DELETE FROM candidates WHERE scoring_job_id = :job_id"),
+        {"job_id": job_id}
+    )
+
+    # Delete the job itself
+    await db.delete(job)
+    await db.commit()
+
+
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_job(
     job_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current: Recruiter = Depends(get_current_recruiter),
 ):
+    """
+    Delete a scoring job (session) and all associated candidates.
+    Updates recruiter stats and invalidates dashboard caches.
+    """
     job = await db.get(ScoringJob, job_id)
     if not job or (not current.is_admin and str(job.recruiter_id) != str(current.id)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
+    # Revoke the Celery task if running
+    if job.celery_task_id:
+        celery_app.control.revoke(job.celery_task_id, terminate=True, signal="SIGTERM")
+
+    # Store recruiter_id and candidate counts for stats update
+    recruiter_id = job.recruiter_id
+    total_candidates = job.total_candidates
+    # Estimate shortlisted (approx 30% of processed, or count from candidates)
+    shortlisted_count = 0
+
+    # Count shortlisted candidates before deletion
+    from sqlalchemy import select
+    shortlisted = await db.execute(
+        select(func.count(Candidate.id)).where(
+            Candidate.scoring_job_id == job_id,
+            Candidate.review_status == "shortlisted"
+        )
+    )
+    shortlisted_count = shortlisted.scalar() or 0
+
+    # Delete all candidates associated with this job first
+    await db.execute(
+        text("DELETE FROM candidates WHERE scoring_job_id = :job_id"),
+        {"job_id": job_id}
+    )
+
+    # Delete the job itself
     await db.delete(job)
+
+    # Update recruiter stats
+    recruiter = await db.get(Recruiter, recruiter_id)
+    if recruiter:
+        recruiter.total_resumes_uploaded = max(0, recruiter.total_resumes_uploaded - total_candidates)
+        recruiter.total_shortlisted = max(0, recruiter.total_shortlisted - shortlisted_count)
+
     await db.commit()
 
 
@@ -220,8 +298,8 @@ async def get_client_analytics(
 @router.post("/{job_id}/add-candidates", response_model=ScoringJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def add_candidates_to_job(
     job_id: uuid.UUID,
-    resumes: List[UploadFile] = File(..., description="Candidate resume PDFs"),
-    linkedin_profiles: List[UploadFile] = File(..., description="LinkedIn profile PDFs (same order as resumes)"),
+    resumes: List[UploadFile] = File(..., description="Candidate resume documents"),
+    linkedin_profiles: List[UploadFile] = File(..., description="LinkedIn profile documents (same order as resumes)"),
     db: AsyncSession = Depends(get_db),
     current: Recruiter = Depends(get_current_recruiter),
 ):
@@ -252,23 +330,21 @@ async def add_candidates_to_job(
             meta["job_title"] = job_title
             job.meta = meta
             await db.flush()
+            await db.commit()
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Job missing job title (unable to backfill). Please reload session.",
             )
 
-    # Validate mime types
+    # Validate file types
     for f in resumes + linkedin_profiles:
-        if f.content_type not in ALLOWED_MIME:
+        filename = f.filename or ""
+        ext = Path(filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"{f.filename} is not a PDF",
-            )
-        if not (f.filename or "").lower().endswith(".pdf"):
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"{f.filename} must have .pdf extension",
+                detail=f"{filename} must be a PDF or Word document (.pdf, .docx)",
             )
         if has_prompt_injection(f.filename or ""):
             raise HTTPException(

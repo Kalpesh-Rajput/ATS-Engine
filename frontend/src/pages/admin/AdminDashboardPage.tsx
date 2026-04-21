@@ -1,28 +1,51 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { 
-  CheckCircle, 
-  FileText, 
-  Plus, 
-  Users, 
-  Building2, 
-  ArrowRight, 
-  Mail, 
+import {
+  CheckCircle,
+  FileText,
+  Plus,
+  Users,
+  Building2,
+  ArrowRight,
+  Mail,
   Briefcase,
   TrendingUp,
   Calendar,
   Award,
-  Activity
+  Activity,
+  Trash2
 } from 'lucide-react'
-import { jobService, recruiterService } from '../../services/apiServices'
+import { jobService, recruiterService, candidateService } from '../../services/apiServices'
 import { useState, useMemo } from 'react'
 import { Button } from '../../components/common/Button'
 import { Card } from '../../components/common/Card'
 import { Badge } from '../../components/common/Badge'
+import toast from 'react-hot-toast'
 
 export default function AdminDashboardPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [selectedClient, setSelectedClient] = useState<string | null>(null)
+
+  const deleteRecruiterMutation = useMutation({
+    mutationFn: (recruiterId: string) => recruiterService.deleteRecruiter(recruiterId),
+    onSuccess: () => {
+      toast.success('Recruiter deleted successfully')
+      queryClient.invalidateQueries({ queryKey: ['all-recruiters'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['all-candidates'] })
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || 'Failed to delete recruiter')
+    },
+  })
+
+  const handleDeleteRecruiter = (recruiterId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (window.confirm('Are you sure you want to delete this recruiter? All their data will be permanently removed.')) {
+      deleteRecruiterMutation.mutate(recruiterId)
+    }
+  }
 
   // Fetch all jobs to extract client info
   const { data: jobs = [] } = useQuery({
@@ -41,28 +64,80 @@ export default function AdminDashboardPage() {
     refetchInterval: 30000,
   })
 
-  // Calculate dynamic KPIs based on actual recruiter data changes
+  // Fetch real-time candidate data for accurate resume counts
+  const { data: allCandidatesData, error: candidatesError } = useQuery({
+    queryKey: ['all-candidates'],
+    queryFn: () => candidateService.listCandidates({ page: 1, page_size: 1000 }),
+    refetchInterval: 15000,
+    retry: 3,
+  })
+
+  // Log error if candidates fetch fails
+  if (candidatesError) {
+    console.error('Failed to fetch all candidates:', candidatesError)
+  }
+
+  // Calculate real-time resume counts per recruiter
+  const recruiterResumeCounts = useMemo(() => {
+    if (!allCandidatesData || !('candidates' in allCandidatesData) || !allCandidatesData.candidates) return {}
+    
+    console.log('Candidates data:', (allCandidatesData as any).candidates?.slice(0, 3)) // Debug: Show first 3 candidates
+    
+    const counts: { [key: string]: number } = {}
+    ;(allCandidatesData as any).candidates.forEach((candidate: any) => {
+      // Try different possible field names for recruiter ID
+      const recruiterId = candidate.recruiter_id || candidate.recruiterId || candidate.recruiter
+      if (recruiterId) {
+        counts[recruiterId] = (counts[recruiterId] || 0) + 1
+      }
+    })
+    console.log('Recruiter resume counts:', counts) // Debug: Show calculated counts
+    return counts
+  }, [allCandidatesData])
+
+  // Calculate real-time shortlisted counts per recruiter
+  const recruiterShortlistedCounts = useMemo(() => {
+    if (!allCandidatesData || !('candidates' in allCandidatesData) || !allCandidatesData.candidates) return {}
+    
+    const counts: { [key: string]: number } = {}
+    ;(allCandidatesData as any).candidates.forEach((candidate: any) => {
+      // Try different possible field names for recruiter ID
+      const recruiterId = candidate.recruiter_id || candidate.recruiterId || candidate.recruiter
+      if (recruiterId && candidate.review_status === 'shortlisted') {
+        counts[recruiterId] = (counts[recruiterId] || 0) + 1
+      }
+    })
+    return counts
+  }, [allCandidatesData])
+
+  // Calculate dynamic KPIs based on real-time candidate data
   const dynamicStats = useMemo(() => {
     const totalRecruiters = allRecruiters.length
     const totalClients = clients.length
-    const totalResumes = allRecruiters.reduce((sum: number, r: any) => sum + (r.total_resumes_uploaded || 0), 0)
-    const totalShortlisted = allRecruiters.reduce((sum: number, r: any) => sum + (r.total_shortlisted || 0), 0)
+    
+    // Use real-time candidate counts instead of cached recruiter data
+    const totalResumes = Object.values(recruiterResumeCounts).reduce((sum: number, count: number) => sum + count, 0)
+    const totalShortlisted = Object.values(recruiterShortlistedCounts).reduce((sum: number, count: number) => sum + count, 0)
     
     // Calculate real conversion rate
     const avgConversionRate = totalResumes > 0 ? ((totalShortlisted / totalResumes) * 100).toFixed(1) : '0'
     
     // Calculate trend based on recent activity (compare with previous period)
-    // Use actual data if available, otherwise calculate from growth patterns
-    const recentActivity = allRecruiters.reduce((sum: number, r: any) => {
-      const recentUploads = r.recent_uploads || Math.floor((r.total_resumes_uploaded || 0) * 0.1)
-      return sum + recentUploads
-    }, 0)
-    
+    const recentActivity = Math.floor(totalResumes * 0.1) // 10% as recent activity estimate
     const trendValue = totalResumes > 0 ? ((recentActivity / totalResumes) * 100).toFixed(1) : '0'
     
     // Calculate active jobs
     const activeJobs = jobs.filter((j: any) => j.status === 'processing' || j.status === 'pending').length
     const completedJobs = jobs.filter((j: any) => j.status === 'completed').length
+    
+    // Calculate top performer based on real-time data
+    const topPerformer = allRecruiters.length > 0 
+      ? [...allRecruiters].sort((a: any, b: any) => {
+          const aShortlisted = recruiterShortlistedCounts[a.id] || 0
+          const bShortlisted = recruiterShortlistedCounts[b.id] || 0
+          return bShortlisted - aShortlisted
+        })[0]
+      : null
     
     return {
       totalRecruiters,
@@ -75,12 +150,9 @@ export default function AdminDashboardPage() {
       trendUp: true,
       activeJobs,
       completedJobs,
-      // Calculate top performer dynamically
-      topPerformer: allRecruiters.length > 0 
-        ? [...allRecruiters].sort((a: any, b: any) => (b.total_shortlisted || 0) - (a.total_shortlisted || 0))[0]
-        : null
+      topPerformer
     }
-  }, [allRecruiters, clients, jobs])
+  }, [allRecruiters, clients, jobs, recruiterResumeCounts, recruiterShortlistedCounts])
 
   const statCards = [
     { 
@@ -194,9 +266,9 @@ export default function AdminDashboardPage() {
               <p className="text-sm text-gray-400 mt-1">Add your first recruiter to get started</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div>
               {/* Top Performers */}
-              <div className="lg:col-span-2">
+              <div>
                 <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                   <Award className="w-4 h-4 text-amber-500" />
                   Top Performers
@@ -208,9 +280,18 @@ export default function AdminDashboardPage() {
                 </h3>
                 <div className="space-y-3">
                   {[...allRecruiters]
-                    .sort((a: any, b: any) => (b.total_shortlisted || 0) - (a.total_shortlisted || 0))
+                    .sort((a: any, b: any) => {
+                      const aShortlisted = recruiterShortlistedCounts[a.id] || 0
+                      const bShortlisted = recruiterShortlistedCounts[b.id] || 0
+                      return bShortlisted - aShortlisted
+                    })
                     .slice(0, 5)
-                    .map((rec: any, index: number) => (
+                    .map((rec: any, index: number) => {
+                      const realTimeResumes = recruiterResumeCounts[rec.id] || 0
+                      const realTimeShortlisted = recruiterShortlistedCounts[rec.id] || 0
+                      const conversionRate = realTimeResumes > 0 ? (realTimeShortlisted / realTimeResumes) * 100 : 0
+                      
+                      return (
                     <div 
                       key={rec.id}
                       onClick={() => navigate(`/admin/view-recruiter/${rec.id}`)}
@@ -229,52 +310,23 @@ export default function AdminDashboardPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-gray-900 truncate">{rec.user_name}</p>
-                        <p className="text-xs text-gray-500">{rec.total_resumes_uploaded || 0} resumes processed</p>
+                        <p className="text-xs text-gray-500">{realTimeResumes} resumes processed</p>
                       </div>
                       <div className="text-right">
-                        <p className="font-bold text-success-600">{rec.total_shortlisted || 0}</p>
+                        <p className="font-bold text-success-600">{realTimeShortlisted}</p>
                         <p className="text-xs text-gray-400">shortlisted</p>
                       </div>
                       <div className="w-16">
                         <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
                           <div 
                             className="h-full rounded-full bg-gradient-to-r from-success-500 to-success-400"
-                            style={{ width: `${Math.min(((rec.total_shortlisted || 0) / Math.max(rec.total_resumes_uploaded || 1, 1)) * 100, 100)}%` }}
+                            style={{ width: `${Math.min(conversionRate, 100)}%` }}
                           />
                         </div>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Quick Stats - Dynamic */}
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-gradient-to-br from-blue-50 to-blue-100/50 border border-blue-100">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Calendar className="w-5 h-5 text-blue-600" />
-                    <span className="text-sm font-medium text-gray-700">Active Jobs</span>
-                  </div>
-                  <p className="text-2xl font-bold text-gray-900">{dynamicStats.activeJobs}</p>
-                  <p className="text-xs text-gray-500">{dynamicStats.completedJobs} completed</p>
-                </div>
-                
-                <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-50 to-emerald-100/50 border border-emerald-100">
-                  <div className="flex items-center gap-3 mb-2">
-                    <CheckCircle className="w-5 h-5 text-emerald-600" />
-                    <span className="text-sm font-medium text-gray-700">Success Rate</span>
-                  </div>
-                  <p className="text-2xl font-bold text-gray-900">{dynamicStats.avgConversionRate}%</p>
-                  <p className="text-xs text-gray-500">{dynamicStats.totalShortlisted.toLocaleString()} shortlisted</p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-gradient-to-br from-violet-50 to-violet-100/50 border border-violet-100">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Building2 className="w-5 h-5 text-violet-600" />
-                    <span className="text-sm font-medium text-gray-700">Platform Activity</span>
-                  </div>
-                  <p className="text-2xl font-bold text-gray-900">{dynamicStats.recentActivity}</p>
-                  <p className="text-xs text-gray-500">resumes this week</p>
+                      )
+                    })}
                 </div>
               </div>
             </div>
@@ -318,16 +370,25 @@ export default function AdminDashboardPage() {
             {selectedClient ? (
               <div className="space-y-2">
                 {clientDetails.find((c) => c.name === selectedClient)?.recruiters.map((rec: any) => (
-                  <button
-                    key={rec.id}
-                    type="button"
-                    onClick={() => navigate(`/admin/view-recruiter/${rec.id}`)}
-                    className="w-full rounded-xl border border-gray-200 bg-gray-50/80 p-3 text-left transition-all hover:border-primary-200 hover:bg-primary-50/50"
-                  >
-                    <p className="font-medium text-gray-900">{rec.user_name}</p>
-                    <p className="mt-0.5 text-xs text-gray-500">{rec.post}</p>
-                    <p className="mt-1 text-xs text-gray-500">{rec.email}</p>
-                  </button>
+                  <div key={rec.id} className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/admin/view-recruiter/${rec.id}`)}
+                      className="flex-1 rounded-xl border border-gray-200 bg-gray-50/80 p-3 text-left transition-all hover:border-primary-200 hover:bg-primary-50/50"
+                    >
+                      <p className="font-medium text-gray-900">{rec.user_name}</p>
+                      <p className="mt-0.5 text-xs text-gray-500">{rec.post}</p>
+                      <p className="mt-1 text-xs text-gray-500">{rec.email}</p>
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteRecruiter(rec.id, e)}
+                      disabled={deleteRecruiterMutation.isPending}
+                      className="p-2 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                      title="Delete recruiter"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 ))}
               </div>
             ) : (
@@ -344,40 +405,52 @@ export default function AdminDashboardPage() {
             <div className="space-y-2">
               {(selectedClient ? clientDetails.find((c) => c.name === selectedClient)?.recruiters : allRecruiters)
                 ?.slice(0, 5)
-                .map((rec: any) => (
-                  <button
-                    key={rec.id}
-                    type="button"
-                    onClick={() => navigate(`/admin/view-recruiter/${rec.id}`)}
-                    className="w-full rounded-xl border border-gray-200 bg-gradient-to-br from-gray-50 to-white p-3 text-left transition-all hover:border-primary-200 hover:shadow-sm"
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="font-medium text-gray-900">{rec.user_name}</p>
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-xs font-bold text-white">
-                        {rec.profiles?.avatar || rec.user_name[0]}
+                .map((rec: any) => {
+                  const realTimeResumes = recruiterResumeCounts[rec.id] || 0
+                  const realTimeShortlisted = recruiterShortlistedCounts[rec.id] || 0
+                  const conversionRate = realTimeResumes > 0 ? ((realTimeShortlisted / realTimeResumes) * 100).toFixed(1) : '0'
+
+                  return (
+                  <div key={rec.id} className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/admin/view-recruiter/${rec.id}`)}
+                      className="flex-1 rounded-xl border border-gray-200 bg-gradient-to-br from-gray-50 to-white p-3 text-left transition-all hover:border-primary-200 hover:shadow-sm"
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="font-medium text-gray-900">{rec.user_name}</p>
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-xs font-bold text-white">
+                          {rec.profiles?.avatar || rec.user_name[0]}
+                        </div>
                       </div>
-                    </div>
-                    <div className="space-y-1 text-xs">
-                      <div className="flex justify-between text-gray-600">
-                        <span>Resumes</span>
-                        <span className="font-medium text-gray-900">{rec.total_resumes_uploaded}</span>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between text-gray-600">
+                          <span>Resumes</span>
+                          <span className="font-medium text-gray-900">{realTimeResumes}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-600">
+                          <span>Shortlisted</span>
+                          <span className="font-medium text-success-600">{realTimeShortlisted}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-600">
+                          <span>Rate</span>
+                          <span className="font-medium text-primary-600">
+                            {conversionRate}%
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-gray-600">
-                        <span>Shortlisted</span>
-                        <span className="font-medium text-success-600">{rec.total_shortlisted}</span>
-                      </div>
-                      <div className="flex justify-between text-gray-600">
-                        <span>Rate</span>
-                        <span className="font-medium text-primary-600">
-                          {rec.total_resumes_uploaded > 0
-                            ? ((rec.total_shortlisted / rec.total_resumes_uploaded) * 100).toFixed(1)
-                            : 0}
-                          %
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteRecruiter(rec.id, e)}
+                      disabled={deleteRecruiterMutation.isPending}
+                      className="p-2 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                      title="Delete recruiter"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                  )
+                })}
             </div>
           </Card>
         </div>
@@ -408,9 +481,19 @@ export default function AdminDashboardPage() {
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-lg font-bold text-white shadow-md">
                     {rec.profiles?.avatar || rec.user_name[0]}
                   </div>
-                  <span className="rounded-full bg-primary-50 px-2.5 py-1 text-xs font-semibold capitalize text-primary-800 ring-1 ring-primary-200/80">
-                    {rec.post}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-primary-50 px-2.5 py-1 text-xs font-semibold capitalize text-primary-800 ring-1 ring-primary-200/80">
+                      {rec.post}
+                    </span>
+                    <button
+                      onClick={(e) => handleDeleteRecruiter(rec.id, e)}
+                      disabled={deleteRecruiterMutation.isPending}
+                      className="p-1.5 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                      title="Delete recruiter"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <p className="mb-1 font-semibold text-gray-900">{rec.user_name}</p>
@@ -426,30 +509,34 @@ export default function AdminDashboardPage() {
                 </div>
 
                 <div className="space-y-2 border-t border-gray-100 pt-4">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-gray-600">Resumes uploaded</span>
-                    <span className="font-semibold text-gray-900">{rec.total_resumes_uploaded}</span>
-                  </div>
-                  <div className="flex justify-between text-xs">
-                    <span className="text-gray-600">Shortlisted</span>
-                    <span className="font-semibold text-success-600">{rec.total_shortlisted}</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-gray-100">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-600 transition-all"
-                      style={{
-                        width: `${
-                          rec.total_resumes_uploaded > 0
-                            ? (rec.total_shortlisted / rec.total_resumes_uploaded) * 100
-                            : 0
-                        }%`,
-                      }}
-                    />
-                  </div>
-                  <div className="flex justify-between text-xs">
-                    <span className="text-gray-600">Client</span>
-                    <span className="font-medium capitalize text-gray-900">{rec.client}</span>
-                  </div>
+                  {(() => {
+                    const realTimeResumes = recruiterResumeCounts[rec.id] || 0
+                    const realTimeShortlisted = recruiterShortlistedCounts[rec.id] || 0
+                    const conversionRate = realTimeResumes > 0 ? (realTimeShortlisted / realTimeResumes) * 100 : 0
+                    
+                    return (
+                      <>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-600">Resumes uploaded</span>
+                          <span className="font-semibold text-gray-900">{realTimeResumes}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-600">Shortlisted</span>
+                          <span className="font-semibold text-success-600">{realTimeShortlisted}</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-gray-100">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-600 transition-all"
+                            style={{ width: `${conversionRate}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-600">Client</span>
+                          <span className="font-medium capitalize text-gray-900">{rec.client}</span>
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
 
                 <div className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-primary-50 py-2.5 text-sm font-semibold text-primary-800 ring-1 ring-primary-200/60">

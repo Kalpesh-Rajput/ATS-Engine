@@ -49,6 +49,19 @@ class Candidate(Base):
     cons: Mapped[Optional[dict]] = mapped_column(JSONB)                # list[str]
     extracted_data: Mapped[Optional[dict]] = mapped_column(JSONB)      # raw parser output
 
+    # KPI Evaluation fields (deterministic)
+    evaluation_breakdown: Mapped[Optional[dict]] = mapped_column(JSONB)  # KPI metrics: tech_stack, core_strengths, education, experience
+    kpi_validation: Mapped[Optional[dict]] = mapped_column(JSONB)        # KPI validation results
+
+    # Fit Analysis fields (LLM-powered)
+    compatibility_assessment: Mapped[Optional[dict]] = mapped_column(JSONB)  # Fit scores: technical_suitability, workplace_alignment, advancement_readiness
+    fit_reasoning: Mapped[Optional[dict]] = mapped_column(JSONB)           # LLM reasoning per metric
+    key_signals: Mapped[Optional[dict]] = mapped_column(JSONB)              # Quick assessment signals
+    strengths: Mapped[Optional[dict]] = mapped_column(JSONB)                # Derived strengths
+    gaps: Mapped[Optional[dict]] = mapped_column(JSONB)                     # Identified gaps
+    fit_validation: Mapped[Optional[dict]] = mapped_column(JSONB)          # Fit validation results
+    fit_analysis_debug: Mapped[Optional[dict]] = mapped_column(JSONB)      # Debug info (LLM vs fallback)
+
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     # pending | processing | completed | failed
 
