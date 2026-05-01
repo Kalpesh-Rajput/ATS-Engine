@@ -499,3 +499,98 @@ alembic error solution
 check current version : alembic current 
 chnage code with down_revision : alembic stamp d323aee86632
 final : alembic upgrade head
+
+
+
+
+# MinIO Setup
+
+👉 Download MinIO server:
+https://dl.min.io/server/minio/release/windows-amd64/minio.exe
+
+mkdir C:\minio  - create a  folder any where in working folder most same user that you are working on
+
+-move this file to that folder 
+-Open terminal and run the command
+
+$env:MINIO_ROOT_USER="minioadmin"; $env:MINIO_ROOT_PASSWORD="minioadmin"; .\minio.exe server C:\minio\data --console-address ":9001"
+
+```
+
+- **API endpoint:** `http://localhost:9000`
+- **Console:** `http://localhost:9001` (user: `minioadmin`, pass: `minioadmin`)
+
+## 2. Create Bucket in MinIO
+
+folder name  - ats-bucket
+
+In your project root path creatre folder  = ats-bucket , then copy this path and past this in minIO under (Create new Path)
+
+
+
+## 3. Environment variables (already set in `.env`)
+
+```env
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_SECURE=false
+```
+
+## 4. How it works
+
+- Resumes and LinkedIn profiles are stored in MinIO (not local disk)
+- Each recruiter gets their own bucket: `ats-resumes-{recruiter_id}`
+- View/download links use presigned URLs (1-hour expiry)
+- Celery workers stream files from MinIO to temp local paths for parsing
+
+> **Existing candidates** with local file paths will need to be re-uploaded to appear in MinIO.
+
+
+
+# LangSmith Integration Guide
+
+### 1. Create a LangSmith Account
+- Visit https://smith.langchain.com
+- Sign up for a free account
+- Create an organization and project
+
+### 2. Get Your API Key
+- Go to Settings → API Keys
+- Create a new API key and copy it
+
+### 3. Add Environment Variables
+Add these to your `.env` file:
+
+```env
+# LangSmith Configuration
+LANGSMITH_API_KEY=your-api-key-here
+LANGSMITH_PROJECT=ats-engine
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_TRACING_V2=true
+LANGSMITH_ENABLED=true
+```
+
+### 4. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Quick Fix - Create the Project
+- Option 1: Auto-Create Project (Recommended)
+- Simply process another candidate in your ATS app. LangSmith will automatically create the ats-engine project when the first trace is sent.
+
+### Option 2: Manual Creation
+- Go to https://smith.langchain.com
+- Click "Projects" in the left sidebar
+- Click "+ New Project"
+- Name: ats-engine
+- Click "Create Project"
+
+### Test It Now
+- Let me run a quick test to send a trace to your ats-engine project:
+
+```bash
+cd backend
+python test_langsmith.py
+```
