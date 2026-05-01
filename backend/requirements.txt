@@ -31,6 +31,7 @@ langchain-community>=0.3.0
 langgraph>=0.1.1
 groq>=0.9.0
 openai
+langsmith>=0.1.0
 
 # ─── Embeddings + Vector DB ──────────────────────────────────────
 sentence-transformers>=2.7.0
@@ -51,3 +52,6 @@ structlog>=24.1.0
 argon2_cffi
 python-docx>=0.8.12
 pydantic-settings
+
+# ─── Object Storage ───────────────────────────────────────────────
+minio>=7.2.0
