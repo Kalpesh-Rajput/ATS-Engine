@@ -2,10 +2,59 @@
 from typing import Any, Dict, List
 
 from app.agents.state import ATSState
-from app.agents.prompts.templates import FIT_ANALYSIS_SYSTEM, FIT_ANALYSIS_PROMPT
-from app.agents.tools.llm_client import llm_call_json
+from app.agents.tools.llm_client import llm_call_json_with_metrics
 from app.core.config import settings
 from app.core.logging import logger
+from app.services.agent_checkpoint import (
+    attach_agent_result,
+    build_agent_result,
+    deep_merge,
+    load_agent_checkpoint,
+    save_agent_checkpoint,
+    stable_hash,
+    summarize_llm_metrics,
+)
+
+
+FIT_REASONING_SYSTEM = """You write concise talent assessment reasoning.
+Scores are already fixed by deterministic KPI logic. Do not change or recalculate scores.
+Return ONLY valid JSON."""
+
+
+FIT_REASONING_PROMPT = """Write evidence-based reasoning for these fixed fit scores.
+
+FIXED SCORES:
+- technical_suitability: {technical_suitability}
+- workplace_alignment: {workplace_alignment}
+- advancement_readiness: {advancement_readiness}
+
+KPI METRICS:
+- technology_stack_score: {key_metrics[tech_stack_score]}
+- core_strengths_score: {key_metrics[core_strengths_score]}
+- education_score: {key_metrics[education_score]}
+- experience_score: {key_metrics[experience_score]}
+- soft_skills_detected: {key_metrics[soft_skills_detected]}
+
+SKILLS:
+- matched: {skills_matched}
+- missing: {skills_missing}
+
+EXPERIENCE:
+{experience_summary}
+
+EDUCATION:
+{education_summary}
+
+Return JSON:
+{{
+  "reasoning": {{
+    "technical": "1-2 concise sentences using concrete evidence",
+    "workplace": "1-2 concise sentences using concrete evidence",
+    "advancement": "1-2 concise sentences using concrete evidence"
+  }},
+  "strengths": ["specific strength 1", "specific strength 2"],
+  "gaps": ["specific gap 1", "specific gap 2"]
+}}"""
 
 
 def _prepare_fit_input(state: ATSState) -> Dict[str, Any]:
@@ -88,6 +137,37 @@ def _prepare_fit_input(state: ATSState) -> Dict[str, Any]:
     }
 
 
+def calculate_deterministic_fit_scores(metrics: Dict[str, Any]) -> Dict[str, int]:
+    """Stable KPI-to-fit score mapping used before any LLM reasoning."""
+    tech_score = float(metrics.get("tech_stack_score", 0) or 0)
+    core_score = float(metrics.get("core_strengths_score", 0) or 0)
+    edu_score = float(metrics.get("education_score", 0) or 0)
+    exp_score = float(metrics.get("experience_score", 0) or 0)
+
+    return {
+        "technical_suitability": min(100, int(0.7 * tech_score + 0.2 * exp_score + 0.1 * edu_score)),
+        "workplace_alignment": min(100, int(0.4 * core_score + 0.3 * exp_score + 0.2 * tech_score + 0.1 * edu_score)),
+        "advancement_readiness": min(100, int(0.4 * edu_score + 0.3 * exp_score + 0.2 * core_score + 0.1 * tech_score)),
+    }
+
+
+def _validate_fit_reasoning_json(data: dict) -> list[str]:
+    errors: list[str] = []
+    reasoning = data.get("reasoning")
+    if not isinstance(reasoning, dict):
+        errors.append("reasoning_missing")
+        return errors
+    for field in ["technical", "workplace", "advancement"]:
+        value = reasoning.get(field)
+        if not isinstance(value, str) or len(value.strip()) < 10:
+            errors.append(f"reasoning_{field}_too_short")
+    for field in ["strengths", "gaps"]:
+        value = data.get(field)
+        if value is not None and not isinstance(value, list):
+            errors.append(f"{field}_must_be_list")
+    return errors
+
+
 def fit_agent(state: ATSState) -> ATSState:
     """
     Fit Analysis Agent (Node) - LLM-powered with controlled output.
@@ -109,7 +189,7 @@ def fit_agent(state: ATSState) -> ATSState:
     if not evaluation_breakdown:
         logger.warning("fit_agent_no_kpi_data", candidate_id=state["candidate_id"])
         errors.append("fit_agent: evaluation_breakdown not available from KPI agent")
-        return {
+        out = {
             "errors": errors,
             "compatibility_assessment": {
                 "technical_suitability": 0,
@@ -125,93 +205,158 @@ def fit_agent(state: ATSState) -> ATSState:
             "strengths": [],
             "gaps": [],
         }
-    
-    # Prepare structured input for LLM
-    fit_input = _prepare_fit_input(state)
-    
-    try:
-        # LLM call with temperature 0 for deterministic output
-        result = llm_call_json(
-            FIT_ANALYSIS_SYSTEM,
-            FIT_ANALYSIS_PROMPT.format(**fit_input),
+        agent_result = build_agent_result(
+            status="failed",
+            confidence=0.0,
+            data={"reason": "missing_evaluation_breakdown"},
+            errors=["fit_agent: evaluation_breakdown not available from KPI agent"],
+            metrics={"fallback_used": True, "final_confidence": 0.0},
         )
-        
-        # Extract scores with clamping
-        def _clamp_int(val, default=0):
-            try:
-                v = int(float(val))
-            except (TypeError, ValueError):
-                v = default
-            return max(0, min(100, v))
-        
-        technical_suitability = _clamp_int(result.get("technical_suitability"))
-        workplace_alignment = _clamp_int(result.get("workplace_alignment"))
-        advancement_readiness = _clamp_int(result.get("advancement_readiness"))
-        
-        # Extract reasoning
+        out["extracted_data"] = attach_agent_result(state.get("extracted_data"), "fit", agent_result)
+        save_agent_checkpoint(
+            candidate_id=state["candidate_id"],
+            agent_name="fit",
+            input_hash=stable_hash({"agent": "fit", "evaluation_breakdown": None}),
+            output=out,
+            agent_result=agent_result,
+        )
+        return out
+    
+    fit_input = _prepare_fit_input(state)
+    deterministic_scores = calculate_deterministic_fit_scores(fit_input["key_metrics"])
+    technical_suitability = deterministic_scores["technical_suitability"]
+    workplace_alignment = deterministic_scores["workplace_alignment"]
+    advancement_readiness = deterministic_scores["advancement_readiness"]
+
+    input_hash = stable_hash(
+        {
+            "agent": "fit",
+            "evaluation_breakdown": evaluation_breakdown,
+            "skills_matched": fit_input.get("skills_matched", []),
+            "skills_missing": fit_input.get("skills_missing", []),
+            "deterministic_scores": deterministic_scores,
+        }
+    )
+    cached = load_agent_checkpoint(state["candidate_id"], "fit", input_hash)
+    if cached:
+        cached["extracted_data"] = deep_merge(state.get("extracted_data"), cached.get("extracted_data"))
+        cached["extracted_data"].setdefault("agent_cache_hits", {})["fit"] = True
+        logger.info("fit_agent_checkpoint_hit", candidate_id=state["candidate_id"])
+        return cached
+
+    used_llm = True
+    llm_metrics: list[dict] = []
+    try:
+        parsed = llm_call_json_with_metrics(
+            FIT_REASONING_SYSTEM,
+            FIT_REASONING_PROMPT.format(
+                **fit_input,
+                technical_suitability=technical_suitability,
+                workplace_alignment=workplace_alignment,
+                advancement_readiness=advancement_readiness,
+            ),
+            validate=_validate_fit_reasoning_json,
+            repair_attempts=1,
+            validation_attempts=1,
+        )
+        result = parsed.data
+        llm_metrics.append(parsed.metrics)
         reasoning = result.get("reasoning", {})
         technical_reasoning = reasoning.get("technical", "No reasoning provided")
         workplace_reasoning = reasoning.get("workplace", "No reasoning provided")
         advancement_reasoning = reasoning.get("advancement", "No reasoning provided")
-        
-        # Build strengths and gaps from LLM output
-        strengths = result.get("strengths", [])
-        gaps = result.get("gaps", [])
-        
-        # If not provided by LLM, derive from KPI
-        if not strengths:
-            strengths = _derive_strengths_from_kpi(fit_input["key_metrics"])
-        if not gaps:
-            gaps = _derive_gaps_from_kpi(fit_input["key_metrics"])
-        
-        # Derive key signals
-        key_signals = _derive_key_signals(
-            fit_input["key_metrics"],
-            technical_suitability,
-            workplace_alignment,
-            advancement_readiness,
-        )
-        
-        logger.info(
-            "fit_agent_complete",
-            candidate_id=state["candidate_id"],
-            technical_suitability=technical_suitability,
-            workplace_alignment=workplace_alignment,
-            advancement_readiness=advancement_readiness,
-        )
-        
-        return {
-            "errors": errors,
-            "compatibility_assessment": {
-                "technical_suitability": technical_suitability,
-                "workplace_alignment": workplace_alignment,
-                "advancement_readiness": advancement_readiness,
-            },
-            "fit_reasoning": {
-                "technical": technical_reasoning,
-                "workplace": workplace_reasoning,
-                "advancement": advancement_reasoning,
-            },
-            "key_signals": key_signals,
-            "strengths": strengths,
-            "gaps": gaps,
-            "fit_analysis_debug": {
-                "used_llm": True,
-                "input_summary": {
-                    "tech_score": fit_input["key_metrics"]["tech_stack_score"],
-                    "core_score": fit_input["key_metrics"]["core_strengths_score"],
-                    "edu_score": fit_input["key_metrics"]["education_score"],
-                    "exp_score": fit_input["key_metrics"]["experience_score"],
-                },
-            },
-        }
-        
+        strengths = result.get("strengths", []) or _derive_strengths_from_kpi(fit_input["key_metrics"])
+        gaps = result.get("gaps", []) or _derive_gaps_from_kpi(fit_input["key_metrics"])
     except Exception as e:
+        used_llm = False
         logger.error("fit_agent_llm_failed", candidate_id=state["candidate_id"], error=str(e))
         errors.append(f"fit_agent LLM error: {e}")
-        
-        # Fallback: use deterministic scoring based on KPI
-        return _fit_agent_fallback(state, fit_input, errors)
+        metrics = fit_input["key_metrics"]
+        technical_reasoning = (
+            f"Score derived from KPI metrics: tech {metrics['tech_stack_score']}%, "
+            f"experience {metrics['experience_score']}%, education {metrics['education_score']}%."
+        )
+        workplace_reasoning = (
+            f"Score derived from KPI metrics: core strengths {metrics['core_strengths_score']}%, "
+            f"experience {metrics['experience_score']}%, and tech alignment {metrics['tech_stack_score']}%."
+        )
+        advancement_reasoning = (
+            f"Score derived from KPI metrics: education {metrics['education_score']}%, "
+            f"experience {metrics['experience_score']}%, and core strengths {metrics['core_strengths_score']}%."
+        )
+        strengths = _derive_strengths_from_kpi(fit_input["key_metrics"])
+        gaps = _derive_gaps_from_kpi(fit_input["key_metrics"])
+
+    key_signals = _derive_key_signals(
+        fit_input["key_metrics"],
+        technical_suitability,
+        workplace_alignment,
+        advancement_readiness,
+    )
+    confidence = 0.88 if used_llm else 0.72
+    metrics = summarize_llm_metrics(llm_metrics)
+    metrics.update(
+        {
+            "fallback_used": not used_llm,
+            "scores_source": "deterministic_kpi",
+            "final_confidence": confidence,
+        }
+    )
+    out = {
+        "errors": errors,
+        "compatibility_assessment": {
+            "technical_suitability": technical_suitability,
+            "workplace_alignment": workplace_alignment,
+            "advancement_readiness": advancement_readiness,
+        },
+        "fit_reasoning": {
+            "technical": technical_reasoning,
+            "workplace": workplace_reasoning,
+            "advancement": advancement_reasoning,
+        },
+        "key_signals": key_signals,
+        "strengths": strengths,
+        "gaps": gaps,
+        "fit_analysis_debug": {
+            "used_llm_for_reasoning": used_llm,
+            "scores_source": "deterministic_kpi",
+            "input_summary": {
+                "tech_score": fit_input["key_metrics"]["tech_stack_score"],
+                "core_score": fit_input["key_metrics"]["core_strengths_score"],
+                "edu_score": fit_input["key_metrics"]["education_score"],
+                "exp_score": fit_input["key_metrics"]["experience_score"],
+            },
+        },
+    }
+    agent_result = build_agent_result(
+        status="success" if used_llm else "partial",
+        confidence=confidence,
+        data={
+            "compatibility_assessment": out["compatibility_assessment"],
+            "scores_source": "deterministic_kpi",
+            "used_llm_for_reasoning": used_llm,
+        },
+        warnings=[] if used_llm else ["Fit reasoning fell back to deterministic text."],
+        errors=[e for e in errors if e.startswith("fit_agent")],
+        metrics=metrics,
+    )
+    out["extracted_data"] = attach_agent_result(state.get("extracted_data"), "fit", agent_result)
+    save_agent_checkpoint(
+        candidate_id=state["candidate_id"],
+        agent_name="fit",
+        input_hash=input_hash,
+        output=out,
+        agent_result=agent_result,
+    )
+    logger.info(
+        "fit_agent_complete",
+        candidate_id=state["candidate_id"],
+        technical_suitability=technical_suitability,
+        workplace_alignment=workplace_alignment,
+        advancement_readiness=advancement_readiness,
+        scores_source="deterministic_kpi",
+    )
+    return out
 
 
 def _fit_agent_fallback(
